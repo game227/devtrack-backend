@@ -5,6 +5,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 
 from apps.projects.models import Project
+from apps.workspaces.models import Workspace
 from apps.workspaces.permissions import get_membership
 
 from .filters import IssueFilter
@@ -21,16 +22,22 @@ class IssueListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         project_id = self.request.query_params.get("project")
-        if not project_id:
-            raise ValidationError({"project": "This query parameter is required."})
-        project = get_object_or_404(Project, pk=project_id)
-        if get_membership(self.request.user, project.workspace) is None:
-            raise PermissionDenied("You are not a member of this project's workspace.")
-        return (
-            Issue.objects.filter(project=project)
-            .select_related("assignee", "reporter")
-            .prefetch_related("labels")
-        )
+        workspace_id = self.request.query_params.get("workspace")
+        base = Issue.objects.select_related("assignee", "reporter").prefetch_related("labels")
+
+        if project_id:
+            project = get_object_or_404(Project, pk=project_id)
+            if get_membership(self.request.user, project.workspace) is None:
+                raise PermissionDenied("You are not a member of this project's workspace.")
+            return base.filter(project=project)
+
+        if workspace_id:
+            workspace = get_object_or_404(Workspace, pk=workspace_id)
+            if get_membership(self.request.user, workspace) is None:
+                raise PermissionDenied("You are not a member of this workspace.")
+            return base.filter(project__workspace=workspace)
+
+        raise ValidationError({"project": "Either 'project' or 'workspace' query parameter is required."})
 
     def perform_create(self, serializer):
         project = get_object_or_404(Project, pk=self.request.data.get("project"))
