@@ -1,5 +1,7 @@
 from django.urls import path
 
+from apps.comments.views import ProjectCommentsView
+
 from .views import (
     ProjectDetailView,
     ProjectListCreateView,
@@ -16,4 +18,5 @@ urlpatterns = [
         ProjectMemberDetailView.as_view(),
         name="project-member-detail",
     ),
+    path("<int:pk>/comments/", ProjectCommentsView.as_view(), name="project-comments"),
 ]
