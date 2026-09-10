@@ -3,6 +3,7 @@ from django.db import models
 
 
 class User(AbstractUser):
+    email = models.EmailField("email address", unique=True, blank=True)
     avatar = models.ImageField(upload_to="avatars/", blank=True, null=True)
     bio = models.TextField(blank=True)
     # Profile-facing job title (e.g. "Senior Backend Developer") — distinct
