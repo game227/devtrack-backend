@@ -1,3 +1,7 @@
 from django.contrib import admin
 
-# Register your models here.
+from .models import Label, Project, ProjectMember
+
+admin.site.register(Project)
+admin.site.register(ProjectMember)
+admin.site.register(Label)

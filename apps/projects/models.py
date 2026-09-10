@@ -1,3 +1,68 @@
+from django.conf import settings
 from django.db import models
 
-# Create your models here.
+
+class Project(models.Model):
+    class Status(models.TextChoices):
+        PLANNED = "planned", "Planned"
+        ACTIVE = "active", "Active"
+        PAUSED = "paused", "Paused"
+        COMPLETED = "completed", "Completed"
+        ARCHIVED = "archived", "Archived"
+
+    class Priority(models.TextChoices):
+        NONE = "none", "No priority"
+        LOW = "low", "Low"
+        MEDIUM = "medium", "Medium"
+        HIGH = "high", "High"
+        URGENT = "urgent", "Urgent"
+
+    workspace = models.ForeignKey(
+        "workspaces.Workspace", on_delete=models.CASCADE, related_name="projects"
+    )
+    name = models.CharField(max_length=150)
+    description = models.TextField(blank=True)
+    icon = models.CharField(max_length=32, blank=True)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PLANNED)
+    priority = models.CharField(max_length=10, choices=Priority.choices, default=Priority.NONE)
+    start_date = models.DateField(null=True, blank=True)
+    target_date = models.DateField(null=True, blank=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="owned_projects"
+    )
+    repository_url = models.URLField(blank=True)
+    tech_stack = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+
+class ProjectMember(models.Model):
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="members")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="project_memberships"
+    )
+    role = models.CharField(max_length=20, blank=True)
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("project", "user")
+
+    def __str__(self):
+        return f"{self.user} @ {self.project}"
+
+
+class Label(models.Model):
+    workspace = models.ForeignKey(
+        "workspaces.Workspace", on_delete=models.CASCADE, related_name="labels"
+    )
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="labels", null=True, blank=True
+    )
+    name = models.CharField(max_length=50)
+    color = models.CharField(max_length=7, default="#6b7280")
+
+    def __str__(self):
+        return self.name

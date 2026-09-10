@@ -18,6 +18,7 @@ urlpatterns = [
     path("api/v1/auth/", include("apps.accounts.urls")),
     path("api/v1/workspaces/", include("apps.workspaces.urls")),
     path("api/v1/projects/", include("apps.projects.urls")),
+    path("api/v1/labels/", include("apps.projects.label_urls")),
     path("api/v1/issues/", include("apps.issues.urls")),
     path("api/v1/comments/", include("apps.comments.urls")),
     path("api/v1/activities/", include("apps.activities.urls")),
