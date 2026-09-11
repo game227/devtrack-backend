@@ -7,6 +7,8 @@ from django.contrib import admin
 from django.http import JsonResponse
 from django.urls import include, path
 
+from apps.analytics.views import DashboardView
+
 
 def health(request):
     return JsonResponse({"status": "ok"})
@@ -22,6 +24,7 @@ urlpatterns = [
     path("api/v1/issues/", include("apps.issues.urls")),
     path("api/v1/comments/", include("apps.comments.urls")),
     path("api/v1/activities/", include("apps.activities.urls")),
+    path("api/v1/dashboard/", DashboardView.as_view(), name="dashboard"),
     path("api/v1/analytics/", include("apps.analytics.urls")),
     path("api/v1/teams/", include("apps.teams.urls")),
     path("api/v1/cycles/", include("apps.cycles.urls")),
