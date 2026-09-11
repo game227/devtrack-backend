@@ -7,7 +7,7 @@ from django.contrib import admin
 from django.http import JsonResponse
 from django.urls import include, path
 
-from apps.analytics.views import DashboardView, SearchView
+from apps.analytics.views import DashboardView, DeveloperAnalyticsView, SearchView
 from apps.projects.views import NoteDetailView
 
 
@@ -28,6 +28,7 @@ urlpatterns = [
     path("api/v1/activities/", include("apps.activities.urls")),
     path("api/v1/dashboard/", DashboardView.as_view(), name="dashboard"),
     path("api/v1/search/", SearchView.as_view(), name="search"),
+    path("api/v1/users/<int:pk>/analytics/", DeveloperAnalyticsView.as_view(), name="developer-analytics"),
     path("api/v1/analytics/", include("apps.analytics.urls")),
     path("api/v1/teams/", include("apps.teams.urls")),
     path("api/v1/cycles/", include("apps.cycles.urls")),

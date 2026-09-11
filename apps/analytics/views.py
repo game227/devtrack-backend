@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
+from django.db.models.functions import TruncDate
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -219,5 +220,55 @@ class ProjectHealthView(APIView):
                     "bug_rate": bug_rate_health,
                 },
                 "risks": risks,
+            }
+        )
+
+
+DEVELOPER_ACTIVITY_DAYS = 14
+
+
+class DeveloperAnalyticsView(APIView):
+    """Per spec §23 — scoped to one workspace both requester and target share."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        target_user = get_object_or_404(User, pk=pk)
+        workspace_id = request.query_params.get("workspace")
+        if not workspace_id:
+            raise ValidationError({"workspace": "This query parameter is required."})
+        workspace = get_object_or_404(Workspace, pk=workspace_id)
+
+        if get_membership(request.user, workspace) is None:
+            raise PermissionDenied("You are not a member of this workspace.")
+        if get_membership(target_user, workspace) is None:
+            raise PermissionDenied("That user is not a member of this workspace.")
+
+        issues_in_workspace = Issue.objects.filter(project__workspace=workspace)
+        projects_count = Project.objects.filter(
+            Q(workspace=workspace) & (Q(owner=target_user) | Q(members__user=target_user))
+        ).distinct().count()
+        tasks_completed = issues_in_workspace.filter(assignee=target_user, status=DONE_STATUS).count()
+        issues_resolved = issues_in_workspace.filter(reporter=target_user, status=DONE_STATUS).count()
+        open_assigned = issues_in_workspace.filter(assignee=target_user).exclude(status=DONE_STATUS).count()
+
+        since = timezone.now() - timedelta(days=DEVELOPER_ACTIVITY_DAYS)
+        recent_activity = (
+            Activity.objects.filter(workspace=workspace, actor=target_user, created_at__gte=since)
+            .annotate(day=TruncDate("created_at"))
+            .values("day")
+            .annotate(count=Count("id"))
+            .order_by("day")
+        )
+
+        return Response(
+            {
+                "user": {"id": target_user.id, "username": target_user.username, "avatar": _avatar_url(target_user)},
+                "workspace": {"id": workspace.id, "name": workspace.name},
+                "projects_count": projects_count,
+                "tasks_completed": tasks_completed,
+                "issues_resolved": issues_resolved,
+                "open_assigned": open_assigned,
+                "daily_activity": [{"date": row["day"], "count": row["count"]} for row in recent_activity],
             }
         )
