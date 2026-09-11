@@ -7,6 +7,7 @@ from .views import (
     ProjectListCreateView,
     ProjectMemberDetailView,
     ProjectMembersView,
+    ProjectNotesView,
 )
 
 urlpatterns = [
@@ -19,4 +20,5 @@ urlpatterns = [
         name="project-member-detail",
     ),
     path("<int:pk>/comments/", ProjectCommentsView.as_view(), name="project-comments"),
+    path("<int:pk>/notes/", ProjectNotesView.as_view(), name="project-notes"),
 ]

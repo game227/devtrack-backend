@@ -9,10 +9,13 @@ from rest_framework.views import APIView
 from apps.workspaces.models import Workspace
 from apps.workspaces.permissions import get_membership
 
-from .models import Label, Project, ProjectMember
+from apps.workspaces.models import Membership
+
+from .models import Label, Note, Project, ProjectMember
 from .permissions import CanManageProject, IsProjectWorkspaceMember
 from .serializers import (
     LabelSerializer,
+    NoteSerializer,
     ProjectMemberCreateSerializer,
     ProjectMemberSerializer,
     ProjectSerializer,
@@ -124,3 +127,38 @@ class LabelDetailView(generics.RetrieveUpdateDestroyAPIView):
             raise PermissionDenied("You are not a member of this workspace.")
         if request.method in ("PUT", "PATCH", "DELETE") and membership.role not in ("owner", "admin"):
             raise PermissionDenied("Only a workspace admin or owner can modify labels.")
+
+
+class ProjectNotesView(generics.ListCreateAPIView):
+    serializer_class = NoteSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_project(self):
+        project = get_object_or_404(Project, pk=self.kwargs["pk"])
+        if get_membership(self.request.user, project.workspace) is None:
+            raise PermissionDenied("You are not a member of this project's workspace.")
+        return project
+
+    def get_queryset(self):
+        return Note.objects.filter(project=self.get_project()).select_related("author")
+
+    def perform_create(self, serializer):
+        serializer.save(project=self.get_project(), author=self.request.user)
+
+
+class NoteDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Note.objects.select_related("project__workspace", "author").all()
+    serializer_class = NoteSerializer
+    permission_classes = [IsAuthenticated]
+
+    def check_object_permissions(self, request, obj):
+        super().check_object_permissions(request, obj)
+        workspace = obj.project.workspace
+        membership = get_membership(request.user, workspace)
+        if membership is None:
+            raise PermissionDenied("You are not a member of this workspace.")
+        if request.method in ("PUT", "PATCH", "DELETE"):
+            is_author = obj.author_id == request.user.id
+            is_admin = membership.role in (Membership.Role.OWNER, Membership.Role.ADMIN)
+            if not (is_author or is_admin):
+                raise PermissionDenied("Only the note's author or a workspace admin/owner can do that.")

@@ -3,7 +3,7 @@ from rest_framework import serializers
 
 from apps.workspaces.serializers import UserBriefSerializer
 
-from .models import Label, Project, ProjectMember
+from .models import Label, Note, Project, ProjectMember
 
 User = get_user_model()
 
@@ -72,3 +72,12 @@ class LabelSerializer(serializers.ModelSerializer):
         model = Label
         fields = ["id", "workspace", "project", "name", "color"]
         read_only_fields = ["id"]
+
+
+class NoteSerializer(serializers.ModelSerializer):
+    author = UserBriefSerializer(read_only=True)
+
+    class Meta:
+        model = Note
+        fields = ["id", "project", "title", "body", "author", "created_at", "updated_at"]
+        read_only_fields = ["id", "project", "author", "created_at", "updated_at"]
