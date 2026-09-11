@@ -9,7 +9,7 @@ class IssueFilter(django_filters.FilterSet):
 
     class Meta:
         model = Issue
-        fields = ["status", "priority", "type", "assignee", "label"]
+        fields = ["status", "priority", "type", "assignee", "label", "cycle", "milestone"]
 
     def filter_assignee(self, queryset, name, value):
         if value == "me":

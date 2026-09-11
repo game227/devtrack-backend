@@ -39,6 +39,8 @@ class IssueSerializer(serializers.ModelSerializer):
             "assignee",
             "assignee_id",
             "reporter",
+            "cycle",
+            "milestone",
             "labels",
             "label_ids",
             "due_date",

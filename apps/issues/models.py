@@ -40,6 +40,12 @@ class Issue(models.Model):
     reporter = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="reported_issues"
     )
+    cycle = models.ForeignKey(
+        "cycles.Cycle", on_delete=models.SET_NULL, related_name="issues", null=True, blank=True
+    )
+    milestone = models.ForeignKey(
+        "milestones.Milestone", on_delete=models.SET_NULL, related_name="issues", null=True, blank=True
+    )
     labels = models.ManyToManyField("projects.Label", related_name="issues", blank=True)
     due_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
