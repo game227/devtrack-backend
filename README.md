@@ -15,6 +15,18 @@ python manage.py createsuperuser
 python manage.py runserver
 ```
 
+## Docker
+
+```bash
+cp .env.example .env   # SECRET_KEY at minimum; DATABASE_URL is overridden by compose
+docker compose up --build
+```
+
+Runs Postgres + the API (via gunicorn, `DEBUG=False`) on `localhost:8000`.
+Migrations run automatically on container start. Media file serving under
+`DEBUG=False` isn't wired up yet (needs whitenoise/nginx/object storage) —
+that's Deployment-phase work, not this one.
+
 ## Layout
 
 - `config/` — settings (`config/settings/{base,dev,prod}.py`), root URLconf.
@@ -25,6 +37,11 @@ python manage.py runserver
 
 ## Status
 
-Phase 1-2 scaffolding: project boots, all apps registered, `User` model
-defined. No business logic yet beyond auth's user model — see
-`/home/neo/.claude/plans/nifty-nibbling-alpaca.md` for the full roadmap.
+MVP (Phase 1-10) and most of V1 (Phase 11-15, GitHub integration excepted)
+are done: auth, workspaces, projects, issues/kanban, labels, comments,
+notes, teams, cycles, milestones, activity feed, notifications, search,
+rule-based project health, developer analytics, dashboard, Docker. GitHub
+integration and Deployment are intentionally not built — both need
+credentials/decisions only the project owner can provide (a GitHub OAuth
+App, a hosting choice). See `/home/neo/.claude/plans/nifty-nibbling-alpaca.md`
+for the original roadmap.
