@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.contrib.auth import get_user_model
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -10,13 +11,16 @@ from rest_framework.views import APIView
 
 from apps.activities.models import Activity
 from apps.activities.serializers import ActivitySerializer
+from apps.cycles.models import Cycle
 from apps.issues.models import Issue
-from apps.projects.models import Project
-from apps.workspaces.models import Workspace
+from apps.projects.models import Label, Project
+from apps.workspaces.models import Membership, Workspace
 from apps.workspaces.permissions import get_membership
 
+User = get_user_model()
 DONE_STATUS = Issue.Status.DONE
 DEADLINE_WINDOW_DAYS = 30
+SEARCH_LIMIT = 10
 
 
 class DashboardView(APIView):
@@ -104,3 +108,42 @@ class DashboardView(APIView):
                 "recent_activity": ActivitySerializer(recent_activity, many=True).data,
             }
         )
+
+
+class SearchView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        query = request.query_params.get("q", "").strip()
+        workspace_id = request.query_params.get("workspace")
+        if not workspace_id:
+            raise ValidationError({"workspace": "This query parameter is required."})
+        if not query:
+            raise ValidationError({"q": "This query parameter is required."})
+
+        workspace = get_object_or_404(Workspace, pk=workspace_id)
+        if get_membership(request.user, workspace) is None:
+            raise PermissionDenied("You are not a member of this workspace.")
+
+        projects = Project.objects.filter(workspace=workspace, name__icontains=query)[:SEARCH_LIMIT]
+        issues = Issue.objects.filter(project__workspace=workspace, title__icontains=query)[:SEARCH_LIMIT]
+        member_user_ids = Membership.objects.filter(workspace=workspace).values_list("user_id", flat=True)
+        users = User.objects.filter(id__in=member_user_ids, username__icontains=query)[:SEARCH_LIMIT]
+        labels = Label.objects.filter(workspace=workspace, name__icontains=query)[:SEARCH_LIMIT]
+        cycles = Cycle.objects.filter(project__workspace=workspace, name__icontains=query)[:SEARCH_LIMIT]
+
+        return Response(
+            {
+                "projects": [{"id": p.id, "name": p.name, "status": p.status} for p in projects],
+                "issues": [
+                    {"id": i.id, "title": i.title, "type": i.type, "status": i.status} for i in issues
+                ],
+                "users": [{"id": u.id, "username": u.username, "avatar": _avatar_url(u)} for u in users],
+                "labels": [{"id": l.id, "name": l.name, "color": l.color} for l in labels],
+                "cycles": [{"id": c.id, "name": c.name, "project": c.project_id} for c in cycles],
+            }
+        )
+
+
+def _avatar_url(user):
+    return user.avatar.url if user.avatar else None
