@@ -1,5 +1,6 @@
 from django.urls import path
 
+from apps.analytics.views import ProjectHealthView
 from apps.comments.views import ProjectCommentsView
 
 from .views import (
@@ -21,4 +22,5 @@ urlpatterns = [
     ),
     path("<int:pk>/comments/", ProjectCommentsView.as_view(), name="project-comments"),
     path("<int:pk>/notes/", ProjectNotesView.as_view(), name="project-notes"),
+    path("<int:pk>/health/", ProjectHealthView.as_view(), name="project-health"),
 ]

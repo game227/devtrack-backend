@@ -147,3 +147,77 @@ class SearchView(APIView):
 
 def _avatar_url(user):
     return user.avatar.url if user.avatar else None
+
+
+STALE_IN_PROGRESS_DAYS = 7
+ACTIVITY_DECAY_DAYS = 14
+
+
+class ProjectHealthView(APIView):
+    """Rule-based project health score — no AI, per spec §22."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        project = get_object_or_404(Project, pk=pk)
+        if get_membership(request.user, project.workspace) is None:
+            raise PermissionDenied("You are not a member of this project's workspace.")
+
+        today = timezone.localdate()
+        issues = Issue.objects.filter(project=project)
+        total = issues.count()
+        done = issues.filter(status=DONE_STATUS).count()
+
+        task_progress = round(done / total * 100) if total else 100
+
+        with_deadline = issues.exclude(due_date__isnull=True)
+        overdue_issues = with_deadline.exclude(status=DONE_STATUS).filter(due_date__lt=today)
+        deadline_health = (
+            round((with_deadline.count() - overdue_issues.count()) / with_deadline.count() * 100)
+            if with_deadline.exists()
+            else 100
+        )
+
+        open_bugs = issues.filter(type=Issue.Type.BUG).exclude(status=DONE_STATUS)
+        bug_rate_health = round(100 - open_bugs.count() / total * 100) if total else 100
+
+        last_activity = Activity.objects.filter(workspace=project.workspace).order_by("-created_at").first()
+        reference_date = last_activity.created_at.date() if last_activity else project.created_at.date()
+        days_stale = (today - reference_date).days
+        activity_health = max(0, min(100, round(100 - days_stale * (100 / ACTIVITY_DECAY_DAYS))))
+
+        overall = round((task_progress + deadline_health + bug_rate_health + activity_health) / 4)
+        if overall >= 80:
+            status_label = "healthy"
+        elif overall >= 50:
+            status_label = "needs_attention"
+        else:
+            status_label = "at_risk"
+
+        risks = []
+        stale_cutoff = today - timedelta(days=STALE_IN_PROGRESS_DAYS)
+        stale_in_progress = issues.filter(status=Issue.Status.IN_PROGRESS, updated_at__date__lt=stale_cutoff)
+        if stale_in_progress.exists():
+            risks.append(
+                f"{stale_in_progress.count()} task(s) have been in progress for more than "
+                f"{STALE_IN_PROGRESS_DAYS} days."
+            )
+        if overdue_issues.exists():
+            risks.append(f"{overdue_issues.count()} issue(s) are past their due date.")
+        urgent_bugs = open_bugs.filter(priority__in=[Issue.Priority.HIGH, Issue.Priority.URGENT])
+        if urgent_bugs.exists():
+            risks.append(f"{urgent_bugs.count()} unresolved high/urgent priority bug(s).")
+
+        return Response(
+            {
+                "score": overall,
+                "status": status_label,
+                "factors": {
+                    "task_progress": task_progress,
+                    "development_activity": activity_health,
+                    "deadline": deadline_health,
+                    "bug_rate": bug_rate_health,
+                },
+                "risks": risks,
+            }
+        )
