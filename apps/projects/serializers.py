@@ -24,6 +24,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "start_date",
             "target_date",
             "owner",
+            "team",
             "repository_url",
             "tech_stack",
             "created_at",
