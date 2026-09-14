@@ -7,3 +7,5 @@ psycopg[binary]==3.3.5
 django-environ==0.14.0
 pillow==12.3.0
 gunicorn==26.2.0
+requests==2.34.2
+cryptography==50.0.1

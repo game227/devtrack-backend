@@ -99,6 +99,22 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # point at the SPA rather than the API.
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 
+GITHUB_CLIENT_ID = env("GITHUB_CLIENT_ID", default="")
+GITHUB_CLIENT_SECRET = env("GITHUB_CLIENT_SECRET", default="")
+GITHUB_WEBHOOK_SECRET = env("GITHUB_WEBHOOK_SECRET", default="")
+# Symmetric key (Fernet) used to encrypt GitHubAccount.access_token at rest.
+# Generate one with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+FIELD_ENCRYPTION_KEY = env("FIELD_ENCRYPTION_KEY", default="")
+# Must exactly match the callback URL registered on the GitHub OAuth App.
+GITHUB_CALLBACK_URL = env(
+    "GITHUB_CALLBACK_URL", default="http://localhost:8000/api/v1/integrations/github/callback/"
+)
+# Where GitHub POSTs webhook deliveries — a different endpoint from the OAuth
+# callback above, supplied per-repo when the webhook is created via the API.
+GITHUB_WEBHOOK_CALLBACK_URL = env(
+    "GITHUB_WEBHOOK_CALLBACK_URL", default="http://localhost:8000/api/v1/integrations/github/webhook/"
+)
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
