@@ -9,3 +9,4 @@ pillow==12.3.0
 gunicorn==26.2.0
 requests==2.34.2
 cryptography==50.0.1
+whitenoise==6.12.0

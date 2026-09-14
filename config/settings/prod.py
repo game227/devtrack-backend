@@ -1,6 +1,27 @@
 from .base import *  # noqa: F401,F403
 
-# Production hardening (real ALLOWED_HOSTS, SSL/proxy settings, static file
-# storage, etc.) is out of scope for this phase — filled in at Phase 16
-# (Deployment).
 DEBUG = False
+
+# Railway (and most PaaS) terminate TLS at the edge and forward plain HTTP
+# with this header set — without telling Django, request.is_secure() would
+# always read False behind the proxy, breaking secure-cookie/CSRF behavior.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SECURE_SSL_REDIRECT = True
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+# Deliberately not setting SECURE_HSTS_SECONDS yet — Django's own check
+# warns it "can cause serious, irreversible problems" if set carelessly
+# (browsers cache it and refuse plain HTTP even if you need to roll back).
+# Worth revisiting once the domain setup has proven stable.
+
+# Static files served directly by the app via WhiteNoise — no separate
+# static host needed at this scale. Media (user uploads) stays on local
+# disk (FileSystemStorage, Django's default) backed by a mounted volume.
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
+}
+
+MIDDLEWARE = MIDDLEWARE.copy()
+MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
