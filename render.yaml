@@ -1,0 +1,63 @@
+databases:
+  - name: devtrack-db
+    databaseName: devtrack
+    user: devtrack
+    plan: free
+
+services:
+  - type: web
+    name: devtrack-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+    plan: free
+    healthCheckPath: /api/v1/health/
+    preDeployCommand: "python manage.py migrate && python manage.py collectstatic --noinput"
+    disk:
+      name: devtrack-media
+      mountPath: /app/media
+      sizeGB: 1
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.prod
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: devtrack-db
+          property: connectionString
+      - key: ALLOWED_HOSTS
+        value: devtrack-backend.onrender.com
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://devtrack-frontend.onrender.com
+      - key: FRONTEND_URL
+        value: https://devtrack-frontend.onrender.com
+      - key: GITHUB_CALLBACK_URL
+        value: https://devtrack-backend.onrender.com/api/v1/integrations/github/callback/
+      - key: GITHUB_WEBHOOK_CALLBACK_URL
+        value: https://devtrack-backend.onrender.com/api/v1/integrations/github/webhook/
+      # Left blank until a real GitHub OAuth App exists (see README note).
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET
+        sync: false
+      # Fernet key for GitHubAccount.access_token encryption at rest — paste
+      # the value shared with you separately, or generate a fresh one with:
+      # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      - key: FIELD_ENCRYPTION_KEY
+        sync: false
+
+  - type: web
+    name: devtrack-frontend
+    runtime: static
+    repo: https://github.com/game227/devtrack-frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://devtrack-backend.onrender.com/api/v1
+    routes:
+      - source: /*
+        destination: /index.html
