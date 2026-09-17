@@ -14,6 +14,13 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
+# accounts is a foundational/leaf app; telegram_bot is a feature app built on
+# top of it. This one import runs against the codebase's usual leaf<-feature
+# dependency direction — justified because password reset (a leaf-app view)
+# needs to prefer an out-of-band delivery channel a feature app owns. Only
+# the stateless services module is imported, never telegram_bot's models.
+from apps.telegram_bot import services as telegram_services
+
 from .serializers import (
     LoginSerializer,
     PasswordChangeSerializer,
@@ -102,13 +109,29 @@ class PasswordResetRequestView(APIView):
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = PasswordResetTokenGenerator().make_token(user)
             reset_link = f"{settings.FRONTEND_URL}/reset-password/{uid}/{token}/"
-            send_mail(
-                subject="Reset your DevTrack password",
-                message=f"Use this link to reset your password: {reset_link}",
-                from_email=None,
-                recipient_list=[email],
-                fail_silently=True,
-            )
+
+            # Telegram first (if linked) — email is the fallback, not a
+            # second delivery, so a reset link is never sent twice.
+            telegram_account = getattr(user, "telegram_account", None)
+            sent_via_telegram = False
+            if telegram_account is not None:
+                try:
+                    telegram_services.send_message(
+                        telegram_account.chat_id,
+                        f"Reset your DevTrack password: {reset_link}",
+                    )
+                    sent_via_telegram = True
+                except telegram_services.TelegramAPIError:
+                    pass  # fall back to email below
+
+            if not sent_via_telegram:
+                send_mail(
+                    subject="Reset your DevTrack password",
+                    message=f"Use this link to reset your password: {reset_link}",
+                    from_email=None,
+                    recipient_list=[email],
+                    fail_silently=True,
+                )
         # Same response whether or not the account exists — don't leak it.
         return Response({"detail": "If an account with that email exists, a reset link has been sent."})
 

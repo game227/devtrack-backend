@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     "apps.milestones",
     "apps.notifications",
     "apps.integrations",
+    "apps.telegram_bot",
 ]
 
 MIDDLEWARE = [
@@ -102,6 +103,13 @@ FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 GITHUB_CLIENT_ID = env("GITHUB_CLIENT_ID", default="")
 GITHUB_CLIENT_SECRET = env("GITHUB_CLIENT_SECRET", default="")
 GITHUB_WEBHOOK_SECRET = env("GITHUB_WEBHOOK_SECRET", default="")
+# The bot created via @BotFather — password-reset links are delivered here
+# when a user has linked their Telegram account, ahead of email.
+TELEGRAM_BOT_TOKEN = env("TELEGRAM_BOT_TOKEN", default="")
+TELEGRAM_BOT_USERNAME = env("TELEGRAM_BOT_USERNAME", default="")
+# Set on the bot's webhook via Telegram's setWebhook `secret_token` param —
+# echoed back on every update in X-Telegram-Bot-Api-Secret-Token.
+TELEGRAM_WEBHOOK_SECRET = env("TELEGRAM_WEBHOOK_SECRET", default="")
 # Symmetric key (Fernet) used to encrypt GitHubAccount.access_token at rest.
 # Generate one with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 FIELD_ENCRYPTION_KEY = env("FIELD_ENCRYPTION_KEY", default="")

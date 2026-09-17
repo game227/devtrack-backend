@@ -25,3 +25,16 @@ STORAGES = {
 
 MIDDLEWARE = MIDDLEWARE.copy()
 MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
+
+# Password-reset emails go out via Resend's SMTP relay — no new dependency,
+# Django's built-in SMTP backend already does the job.
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = "smtp.resend.com"
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = "resend"
+EMAIL_HOST_PASSWORD = env("RESEND_API_KEY", default="")
+# resend.dev's shared sender only delivers to the Resend account's own
+# verified address until a custom domain is verified on Resend — fine for
+# now, revisit once a real "from" domain is set up.
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="onboarding@resend.dev")
