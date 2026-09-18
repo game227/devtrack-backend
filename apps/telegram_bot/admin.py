@@ -1,5 +1,2 @@
-from django.contrib import admin
-
-from .models import TelegramAccount
-
-admin.site.register(TelegramAccount)
+# Nothing to register — account-linking state lives in the standalone
+# devtrack-telegram-bot service, not in this app's (now empty) models.

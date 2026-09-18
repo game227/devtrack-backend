@@ -111,18 +111,16 @@ class PasswordResetRequestView(APIView):
             reset_link = f"{settings.FRONTEND_URL}/reset-password/{uid}/{token}/"
 
             # Telegram first (if linked) — email is the fallback, not a
-            # second delivery, so a reset link is never sent twice.
-            telegram_account = getattr(user, "telegram_account", None)
+            # second delivery, so a reset link is never sent twice. The bot
+            # service itself knows whether this user has a linked chat (a
+            # 404 there just means "not linked"), so there's nothing to
+            # check locally before trying.
             sent_via_telegram = False
-            if telegram_account is not None:
-                try:
-                    telegram_services.send_message(
-                        telegram_account.chat_id,
-                        f"Reset your DevTrack password: {reset_link}",
-                    )
-                    sent_via_telegram = True
-                except telegram_services.TelegramAPIError:
-                    pass  # fall back to email below
+            try:
+                telegram_services.send_message(user.id, f"Reset your DevTrack password: {reset_link}")
+                sent_via_telegram = True
+            except telegram_services.BotServiceError:
+                pass  # not linked, or the bot service call failed — fall back to email
 
             if not sent_via_telegram:
                 send_mail(
