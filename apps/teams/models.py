@@ -12,6 +12,7 @@ class Team(models.Model):
 
     class Meta:
         unique_together = ("workspace", "name")
+        ordering = ["name"]
 
     def __str__(self):
         return self.name
@@ -26,6 +27,7 @@ class TeamMembership(models.Model):
 
     class Meta:
         unique_together = ("team", "user")
+        ordering = ["joined_at"]
 
     def __str__(self):
         return f"{self.user} @ {self.team}"

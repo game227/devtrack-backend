@@ -43,6 +43,7 @@ class Membership(models.Model):
 
     class Meta:
         unique_together = ("workspace", "user")
+        ordering = ["joined_at"]
 
     def __str__(self):
         return f"{self.user} @ {self.workspace} ({self.role})"
