@@ -119,3 +119,24 @@ class NotificationViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["updated"], 2)
         self.assertEqual(Notification.objects.filter(recipient=self.user, is_read=False).count(), 0)
+
+
+class NotificationActorTests(TestCase):
+    def test_reassigning_to_the_reporter_by_someone_else_still_notifies_them(self):
+        reporter = User.objects.create_user(username="nar", email="nar@example.com", password="pw")
+        other = User.objects.create_user(username="nao", email="nao@example.com", password="pw")
+        workspace = Workspace.objects.create(name="NAWS", owner=reporter)
+        Membership.objects.create(workspace=workspace, user=reporter, role=Membership.Role.OWNER)
+        Membership.objects.create(workspace=workspace, user=other, role=Membership.Role.MEMBER)
+        project = Project.objects.create(workspace=workspace, name="P", owner=reporter)
+        issue = Issue.objects.create(project=project, title="Bug", reporter=reporter, assignee=other)
+        Notification.objects.all().delete()
+
+        client = APIClient()
+        client.force_authenticate(other)
+        response = client.patch(
+            reverse("issue-detail", kwargs={"pk": issue.pk}), {"assignee_id": reporter.pk}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Notification.objects.filter(recipient=reporter, verb="issue_assigned").exists())

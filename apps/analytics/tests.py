@@ -3,6 +3,7 @@ import datetime as dt
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.issues.models import Issue
@@ -167,3 +168,41 @@ class DeveloperAnalyticsViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["tasks_completed"], 1)
         self.assertEqual(response.data["open_assigned"], 1)
+
+
+class ProjectHealthDetailTests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="phdowner", email="phdowner@example.com", password="pw")
+        self.workspace = Workspace.objects.create(name="PHDWS", owner=self.owner)
+        Membership.objects.create(workspace=self.workspace, user=self.owner, role=Membership.Role.OWNER)
+        self.project = Project.objects.create(workspace=self.workspace, name="Quiet", owner=self.owner)
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+        self.url = reverse("project-health", kwargs={"pk": self.project.pk})
+
+    def test_risks_are_also_reported_as_structured_details(self):
+        today = dt.date.today()
+        Issue.objects.create(
+            project=self.project, title="Late", reporter=self.owner, due_date=today - dt.timedelta(days=5)
+        )
+        Issue.objects.create(
+            project=self.project, title="Urgent bug", reporter=self.owner,
+            type=Issue.Type.BUG, priority=Issue.Priority.URGENT,
+        )
+        details = {d["code"]: d for d in self.client.get(self.url).data["risk_details"]}
+        self.assertEqual(details["overdue"]["count"], 1)
+        self.assertEqual(details["urgent_bugs"]["count"], 1)
+
+    def test_a_busy_sibling_project_does_not_hide_a_stalled_one(self):
+        # Push the quiet project's own activity far into the past ...
+        from apps.activities.models import Activity
+
+        Activity.objects.filter(workspace=self.workspace).update(
+            created_at=timezone.now() - dt.timedelta(days=30)
+        )
+        # ... then let a *different* project in the workspace be busy right now.
+        busy = Project.objects.create(workspace=self.workspace, name="Busy", owner=self.owner)
+        Issue.objects.create(project=busy, title="Fresh", reporter=self.owner)
+
+        factors = self.client.get(self.url).data["factors"]
+        self.assertEqual(factors["development_activity"], 0)

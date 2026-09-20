@@ -39,7 +39,8 @@ def stash_previous_assignee(sender, instance, **kwargs):
 def notify_on_assignment(sender, instance, created, **kwargs):
     previous_assignee_id = getattr(instance, "_previous_assignee_id", None)
     if instance.assignee_id and instance.assignee_id != previous_assignee_id:
-        _notify(instance.assignee, instance.reporter, "issue_assigned", instance)
+        actor = getattr(instance, "_actor", None) or instance.reporter
+        _notify(instance.assignee, actor, "issue_assigned", instance)
 
 
 @receiver(post_save, sender=Comment)

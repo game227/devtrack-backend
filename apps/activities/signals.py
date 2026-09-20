@@ -8,6 +8,12 @@ from apps.projects.models import Project
 from .models import Activity
 
 
+def _actor_for(issue):
+    """Whoever caused the change: the request user when the view supplied one
+    (``issue._actor``), the reporter otherwise (shell, seeding, fixtures)."""
+    return getattr(issue, "_actor", None) or issue.reporter
+
+
 def _comment_target_workspace(comment):
     target = comment.content_object
     return target.project.workspace if hasattr(target, "project") else target.workspace
@@ -40,17 +46,22 @@ def log_issue_created_or_moved(sender, instance, created, **kwargs):
     if created:
         Activity.objects.create(
             workspace=workspace,
-            actor=instance.reporter,
+            actor=_actor_for(instance),
             verb="created_issue",
             target=instance,
         )
+        return
+
+    # Callers that log their own richer activity for the transition (e.g. the
+    # GitHub PR-merge handler's ``pr_merged``) opt out to avoid a duplicate entry.
+    if getattr(instance, "_skip_move_activity", False):
         return
 
     previous_status = getattr(instance, "_previous_status", None)
     if previous_status is not None and previous_status != instance.status:
         Activity.objects.create(
             workspace=workspace,
-            actor=instance.reporter,
+            actor=_actor_for(instance),
             verb="moved_issue",
             target=instance,
             metadata={"from": previous_status, "to": instance.status},

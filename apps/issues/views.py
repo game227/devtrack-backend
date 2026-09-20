@@ -50,6 +50,12 @@ class IssueDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Issue.objects.select_related("assignee", "reporter", "project").prefetch_related("labels")
     serializer_class = IssueSerializer
 
+    def perform_update(self, serializer):
+        # Lets the activity/notification signals attribute the change to whoever
+        # made it rather than to the issue's original reporter.
+        serializer.instance._actor = self.request.user
+        serializer.save()
+
     def get_permissions(self):
         if self.request.method == "DELETE":
             return [IsAuthenticated(), CanDeleteIssue()]

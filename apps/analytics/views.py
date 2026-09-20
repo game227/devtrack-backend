@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.activities.models import Activity
+from apps.activities.queries import project_timeline_queryset
 from apps.activities.serializers import ActivitySerializer
 from apps.cycles.models import Cycle
 from apps.issues.models import Issue
@@ -182,7 +183,9 @@ class ProjectHealthView(APIView):
         open_bugs = issues.filter(type=Issue.Type.BUG).exclude(status=DONE_STATUS)
         bug_rate_health = round(100 - open_bugs.count() / total * 100) if total else 100
 
-        last_activity = Activity.objects.filter(workspace=project.workspace).order_by("-created_at").first()
+        # This project's own activity — not the whole workspace's, which would let a
+        # busy sibling project mask a stalled one.
+        last_activity = project_timeline_queryset(project).order_by("-created_at").first()
         reference_date = last_activity.created_at.date() if last_activity else project.created_at.date()
         days_stale = (today - reference_date).days
         activity_health = max(0, min(100, round(100 - days_stale * (100 / ACTIVITY_DECAY_DAYS))))
@@ -195,19 +198,25 @@ class ProjectHealthView(APIView):
         else:
             status_label = "at_risk"
 
+        # Each risk is reported twice: as an English sentence (kept for existing
+        # clients) and as a structured code + counts the UI can localize.
         risks = []
+        risk_details = []
         stale_cutoff = today - timedelta(days=STALE_IN_PROGRESS_DAYS)
-        stale_in_progress = issues.filter(status=Issue.Status.IN_PROGRESS, updated_at__date__lt=stale_cutoff)
-        if stale_in_progress.exists():
+        stale_count = issues.filter(status=Issue.Status.IN_PROGRESS, updated_at__date__lt=stale_cutoff).count()
+        if stale_count:
             risks.append(
-                f"{stale_in_progress.count()} task(s) have been in progress for more than "
-                f"{STALE_IN_PROGRESS_DAYS} days."
+                f"{stale_count} task(s) have been in progress for more than {STALE_IN_PROGRESS_DAYS} days."
             )
-        if overdue_issues.exists():
-            risks.append(f"{overdue_issues.count()} issue(s) are past their due date.")
-        urgent_bugs = open_bugs.filter(priority__in=[Issue.Priority.HIGH, Issue.Priority.URGENT])
-        if urgent_bugs.exists():
-            risks.append(f"{urgent_bugs.count()} unresolved high/urgent priority bug(s).")
+            risk_details.append({"code": "stale_in_progress", "count": stale_count, "days": STALE_IN_PROGRESS_DAYS})
+        overdue_count = overdue_issues.count()
+        if overdue_count:
+            risks.append(f"{overdue_count} issue(s) are past their due date.")
+            risk_details.append({"code": "overdue", "count": overdue_count})
+        urgent_bug_count = open_bugs.filter(priority__in=[Issue.Priority.HIGH, Issue.Priority.URGENT]).count()
+        if urgent_bug_count:
+            risks.append(f"{urgent_bug_count} unresolved high/urgent priority bug(s).")
+            risk_details.append({"code": "urgent_bugs", "count": urgent_bug_count})
 
         return Response(
             {
@@ -220,6 +229,7 @@ class ProjectHealthView(APIView):
                     "bug_rate": bug_rate_health,
                 },
                 "risks": risks,
+                "risk_details": risk_details,
             }
         )
 

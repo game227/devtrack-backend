@@ -313,6 +313,8 @@ def _handle_pull_request(repo_link, payload):
                 continue
             previous_status = issue.status
             issue.status = Issue.Status.DONE
+            # pr_merged (below) already records this transition — skip the generic moved_issue.
+            issue._skip_move_activity = True
             issue.save(update_fields=["status", "updated_at"])
             Activity.objects.create(
                 workspace=repo_link.project.workspace,

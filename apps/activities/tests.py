@@ -100,3 +100,73 @@ class ActivityListViewTests(TestCase):
         self.assertNotIn(
             ("issue", Issue.objects.get(title="Other bug").id), targets
         )
+
+
+class ActivityActorTests(TestCase):
+    def setUp(self):
+        self.reporter = User.objects.create_user(username="actrep", email="actrep@example.com", password="pw")
+        self.mover = User.objects.create_user(username="actmove", email="actmove@example.com", password="pw")
+        self.workspace = Workspace.objects.create(name="ACTWS", owner=self.reporter)
+        Membership.objects.create(workspace=self.workspace, user=self.reporter, role=Membership.Role.OWNER)
+        Membership.objects.create(workspace=self.workspace, user=self.mover, role=Membership.Role.MEMBER)
+        self.project = Project.objects.create(workspace=self.workspace, name="P", owner=self.reporter)
+        self.issue = Issue.objects.create(project=self.project, title="Bug", reporter=self.reporter)
+        self.client = APIClient()
+
+    def test_a_status_change_is_attributed_to_the_user_who_made_it(self):
+        self.client.force_authenticate(self.mover)
+        response = self.client.patch(
+            reverse("issue-detail", kwargs={"pk": self.issue.pk}), {"status": "in_progress"}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        activity = Activity.objects.get(verb="moved_issue", object_id=self.issue.id)
+        self.assertEqual(activity.actor, self.mover)  # not the reporter
+
+    def test_without_a_request_user_the_reporter_is_the_fallback(self):
+        self.issue.status = Issue.Status.DONE
+        self.issue.save()
+        self.assertEqual(Activity.objects.get(verb="moved_issue", object_id=self.issue.id).actor, self.reporter)
+
+    def test_callers_can_opt_out_of_the_generic_moved_activity(self):
+        self.issue.status = Issue.Status.DONE
+        self.issue._skip_move_activity = True
+        self.issue.save()
+        self.assertFalse(Activity.objects.filter(verb="moved_issue", object_id=self.issue.id).exists())
+
+
+class ProjectTimelineQueryTests(TestCase):
+    def test_includes_project_issue_and_comment_activity_but_not_other_projects(self):
+        owner = User.objects.create_user(username="tlowner", email="tlowner@example.com", password="pw")
+        workspace = Workspace.objects.create(name="TLWS", owner=owner)
+        Membership.objects.create(workspace=workspace, user=owner, role=Membership.Role.OWNER)
+        mine = Project.objects.create(workspace=workspace, name="Mine", owner=owner)
+        other = Project.objects.create(workspace=workspace, name="Other", owner=owner)
+        my_issue = Issue.objects.create(project=mine, title="Mine bug", reporter=owner)
+        other_issue = Issue.objects.create(project=other, title="Other bug", reporter=owner)
+        Comment.objects.create(
+            content_type=ContentType.objects.get_for_model(Issue), object_id=my_issue.pk, author=owner, body="hi"
+        )
+        Comment.objects.create(
+            content_type=ContentType.objects.get_for_model(Issue), object_id=other_issue.pk, author=owner, body="no"
+        )
+
+        from .queries import project_timeline_queryset
+
+        verbs_and_ids = {(a.verb, a.object_id) for a in project_timeline_queryset(mine)}
+        self.assertIn(("created_project", mine.id), verbs_and_ids)
+        self.assertIn(("created_issue", my_issue.id), verbs_and_ids)
+        self.assertNotIn(("created_project", other.id), verbs_and_ids)
+        self.assertNotIn(("created_issue", other_issue.id), verbs_and_ids)
+        self.assertEqual(sum(1 for verb, _ in verbs_and_ids if verb == "commented"), 1)
+
+    def test_is_a_single_query_with_subqueries_not_materialized_id_lists(self):
+        owner = User.objects.create_user(username="tlowner2", email="tlowner2@example.com", password="pw")
+        workspace = Workspace.objects.create(name="TLWS2", owner=owner)
+        project = Project.objects.create(workspace=workspace, name="P", owner=owner)
+        for i in range(5):
+            Issue.objects.create(project=project, title=f"I{i}", reporter=owner)
+
+        from .queries import project_timeline_queryset
+
+        with self.assertNumQueries(1):
+            list(project_timeline_queryset(project))
