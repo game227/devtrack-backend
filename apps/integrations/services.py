@@ -27,7 +27,7 @@ def build_authorize_url(state):
     params = {
         "client_id": settings.GITHUB_CLIENT_ID,
         "redirect_uri": settings.GITHUB_CALLBACK_URL,
-        "scope": "repo",
+        "scope": settings.GITHUB_OAUTH_SCOPE,
         "state": state,
     }
     return f"{GITHUB_AUTHORIZE_URL}?{urlencode(params)}"

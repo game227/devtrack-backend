@@ -9,10 +9,14 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
-# Deliberately not setting SECURE_HSTS_SECONDS yet — Django's own check
-# warns it "can cause serious, irreversible problems" if set carelessly
-# (browsers cache it and refuse plain HTTP even if you need to roll back).
-# Worth revisiting once the domain setup has proven stable.
+# HSTS is opt-in: browsers cache it and refuse plain HTTP for the whole period, so it
+# stays off (0) until the domain/TLS setup has proven stable. Ramp it up via the
+# environment, e.g. 3600 -> 86400 -> 31536000.
+SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False)
+SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
+
+PASSWORD_RESET_ASYNC = env.bool("PASSWORD_RESET_ASYNC", default=True)
 
 # Static files served directly by the app via WhiteNoise — no separate
 # static host needed at this scale. Media (user uploads) stays on local

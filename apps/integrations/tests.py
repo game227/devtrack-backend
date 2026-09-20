@@ -185,6 +185,8 @@ class WebhookTests(TestCase):
         activity = Activity.objects.get(verb="pr_merged")
         self.assertEqual(activity.actor, self.user)  # no matching GitHubAccount -> falls back to connected_by
         self.assertEqual(activity.target, self.issue)
+        # The merge is recorded once, as pr_merged — not additionally as a generic moved_issue.
+        self.assertFalse(Activity.objects.filter(verb="moved_issue", object_id=self.issue.id).exists())
 
     def test_pull_request_open_does_not_close_issue(self):
         self.post_event(
@@ -271,3 +273,55 @@ class ProjectGithubLinkPermissionTests(TestCase):
         client.force_authenticate(self.owner)
         response = client.delete(self.url)
         self.assertEqual(response.status_code, 404)
+
+
+class EncryptedFieldKeyRotationTests(TestCase):
+    OLD = "ZmRzYWZkc2FmZHNhZmRzYWZkc2FmZHNhZmRzYWZkc2E="  # 32 url-safe base64 bytes
+    NEW = "bmV3a2V5bmV3a2V5bmV3a2V5bmV3a2V5bmV3a2V5bmU="
+
+    def test_values_encrypted_with_an_old_key_stay_readable_after_adding_a_new_first_key(self):
+        from django.db import connection
+
+        user = User.objects.create_user(username="rotuser", email="rotuser@example.com", password="pw")
+        with override_settings(FIELD_ENCRYPTION_KEY=self.OLD):
+            account = GitHubAccount.objects.create(
+                user=user, github_user_id=4242, github_username="rot", access_token="secret-token"
+            )
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT access_token FROM integrations_githubaccount WHERE id = %s", [account.id])
+                old_ciphertext = cursor.fetchone()[0]
+
+        self.assertNotIn("secret-token", old_ciphertext)
+        with override_settings(FIELD_ENCRYPTION_KEY=f"{self.NEW},{self.OLD}"):
+            self.assertEqual(GitHubAccount.objects.get(pk=account.pk).access_token, "secret-token")
+
+    def test_rotate_command_reencrypts_with_the_primary_key(self):
+        from django.core.management import call_command
+        from django.db import connection
+
+        user = User.objects.create_user(username="rotuser2", email="rotuser2@example.com", password="pw")
+        with override_settings(FIELD_ENCRYPTION_KEY=self.OLD):
+            account = GitHubAccount.objects.create(
+                user=user, github_user_id=4343, github_username="rot2", access_token="another-secret"
+            )
+
+        with override_settings(FIELD_ENCRYPTION_KEY=f"{self.NEW},{self.OLD}"):
+            call_command("rotate_encryption_key", stdout=__import__("io").StringIO())
+
+        # After rotation the OLD key is no longer needed.
+        with override_settings(FIELD_ENCRYPTION_KEY=self.NEW):
+            self.assertEqual(GitHubAccount.objects.get(pk=account.pk).access_token, "another-secret")
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT access_token FROM integrations_githubaccount WHERE id = %s", [account.id])
+            self.assertNotIn("another-secret", cursor.fetchone()[0])
+
+
+class OAuthScopeTests(TestCase):
+    @override_settings(GITHUB_CLIENT_ID="cid", GITHUB_OAUTH_SCOPE="public_repo admin:repo_hook")
+    def test_authorize_url_uses_the_configured_scope(self):
+        from urllib.parse import parse_qs, urlparse
+
+        from .services import build_authorize_url
+
+        query = parse_qs(urlparse(build_authorize_url("state123")).query)
+        self.assertEqual(query["scope"], ["public_repo admin:repo_hook"])

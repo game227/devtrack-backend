@@ -96,6 +96,11 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Deliver password-reset links on a background thread so the request returns
+# immediately (and timing does not reveal whether an account exists). Production turns
+# this on; tests and local dev stay synchronous.
+PASSWORD_RESET_ASYNC = env.bool("PASSWORD_RESET_ASYNC", default=False)
+
 # Where the frontend lives — used to build links (e.g. password reset) that
 # point at the SPA rather than the API.
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
@@ -103,6 +108,10 @@ FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 GITHUB_CLIENT_ID = env("GITHUB_CLIENT_ID", default="")
 GITHUB_CLIENT_SECRET = env("GITHUB_CLIENT_SECRET", default="")
 GITHUB_WEBHOOK_SECRET = env("GITHUB_WEBHOOK_SECRET", default="")
+# OAuth scopes requested when a user connects GitHub (space-separated). "repo" is
+# needed to list/hook private repositories; a public-only deployment can narrow it
+# to "public_repo admin:repo_hook" (the least privilege that still creates webhooks).
+GITHUB_OAUTH_SCOPE = env("GITHUB_OAUTH_SCOPE", default="repo")
 # The Telegram bot itself (token, webhook) lives entirely in the standalone
 # devtrack-telegram-bot service now — this app only needs to know its own
 # bot's @username (to build the /start deep link) and how to reach that
@@ -115,6 +124,8 @@ BOT_SERVICE_API_KEY = env("BOT_SERVICE_API_KEY", default="")
 TELEGRAM_LINK_SECRET = env("TELEGRAM_LINK_SECRET", default="")
 # Symmetric key (Fernet) used to encrypt GitHubAccount.access_token at rest.
 # Generate one with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Several comma-separated keys are accepted (first encrypts, all decrypt) so a key
+# can be rotated — see `manage.py rotate_encryption_key`.
 FIELD_ENCRYPTION_KEY = env("FIELD_ENCRYPTION_KEY", default="")
 # Must exactly match the callback URL registered on the GitHub OAuth App.
 GITHUB_CALLBACK_URL = env(
