@@ -1,3 +1,6 @@
+import logging
+import threading
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
@@ -21,6 +24,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 # the stateless services module is imported, never telegram_bot's models.
 from apps.telegram_bot import services as telegram_services
 
+from .messages import password_reset_message
 from .serializers import (
     LoginSerializer,
     PasswordChangeSerializer,
@@ -31,6 +35,30 @@ from .serializers import (
 )
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
+
+
+def _deliver_password_reset(user_id, email, message):
+    """Telegram first (if linked) — email is the fallback, not a second
+    delivery, so a reset link is never sent twice. The bot service itself knows
+    whether this user has a linked chat (a 404 there just means "not linked"),
+    so there is nothing to check locally before trying."""
+    try:
+        telegram_services.send_message(user_id, message["telegram"])
+        return
+    except telegram_services.BotServiceError:
+        pass  # not linked, or the bot service call failed — fall back to email
+
+    try:
+        send_mail(
+            subject=message["subject"],
+            message=message["email"],
+            from_email=None,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception:  # noqa: BLE001 — never let delivery problems reach the caller
+        logger.exception("Password reset email could not be delivered")
 
 
 class RegisterView(generics.CreateAPIView):
@@ -110,26 +138,13 @@ class PasswordResetRequestView(APIView):
             token = PasswordResetTokenGenerator().make_token(user)
             reset_link = f"{settings.FRONTEND_URL}/reset-password/{uid}/{token}/"
 
-            # Telegram first (if linked) — email is the fallback, not a
-            # second delivery, so a reset link is never sent twice. The bot
-            # service itself knows whether this user has a linked chat (a
-            # 404 there just means "not linked"), so there's nothing to
-            # check locally before trying.
-            sent_via_telegram = False
-            try:
-                telegram_services.send_message(user.id, f"Reset your DevTrack password: {reset_link}")
-                sent_via_telegram = True
-            except telegram_services.BotServiceError:
-                pass  # not linked, or the bot service call failed — fall back to email
-
-            if not sent_via_telegram:
-                send_mail(
-                    subject="Reset your DevTrack password",
-                    message=f"Use this link to reset your password: {reset_link}",
-                    from_email=None,
-                    recipient_list=[email],
-                    fail_silently=True,
-                )
+            message = password_reset_message(serializer.validated_data["lang"], reset_link)
+            if settings.PASSWORD_RESET_ASYNC:
+                threading.Thread(
+                    target=_deliver_password_reset, args=(user.id, email, message), daemon=True
+                ).start()
+            else:
+                _deliver_password_reset(user.id, email, message)
         # Same response whether or not the account exists — don't leak it.
         return Response({"detail": "If an account with that email exists, a reset link has been sent."})
 

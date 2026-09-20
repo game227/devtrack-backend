@@ -88,6 +88,8 @@ class PasswordChangeSerializer(serializers.Serializer):
 
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
+    # Language of the message that carries the reset link (the UI's current language).
+    lang = serializers.ChoiceField(choices=["en", "uz"], required=False, default="en")
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
