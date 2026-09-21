@@ -46,6 +46,29 @@ rule-based project health (with structured, localizable risks), developer analyt
 - **Password reset messages** are sent in the UI language (`lang`: `en` or `uz`) and delivered on a
   background thread in production.
 
+## GitHub: connect, import, link
+
+1. **Connect** (Settings → GitHub): needs a GitHub OAuth App whose *Authorization callback URL* is exactly
+   `GITHUB_CALLBACK_URL` (locally `http://localhost:8000/api/v1/integrations/github/callback/`).
+2. **Import a repository as a project** (Projects → Import from GitHub): creates the project, links the
+   repo and imports its issues (up to 300, pull requests excluded). Imported issues keep GitHub's numbers, so
+   `#12` in a commit or pull request means GitHub's issue 12 in such a project.
+3. **Link a repository to an existing project** (project page → GitHub).
+
+**Live updates need a public URL.** GitHub cannot call `localhost`, so locally the link is created
+*without* a webhook (the UI says so) and **Sync now** pulls recent pull requests and commits instead. To get
+real webhooks in development, expose the backend with a tunnel and set the webhook URL before linking:
+
+```bash
+cloudflared tunnel --url http://localhost:8000     # or: ngrok http 8000
+# .env
+GITHUB_WEBHOOK_CALLBACK_URL=https://<tunnel-host>/api/v1/integrations/github/webhook/
+GITHUB_WEBHOOK_SECRET=<any long random string>
+```
+
+Creating a webhook also needs admin rights on the repository; without them the repo is still linked and can
+be synced manually.
+
 ## Configuration
 
 See `.env.example`. Notable settings:

@@ -14,7 +14,7 @@ from django.utils import timezone
 from apps.activities.models import Activity
 from apps.comments.models import Comment
 from apps.cycles.models import Cycle
-from apps.integrations.models import GitHubAccount, GitHubCommit, GitHubPullRequest, GitHubRepositoryLink
+from apps.integrations.models import GitHubCommit, GitHubPullRequest, GitHubRepositoryLink
 from apps.issues.models import Issue
 from apps.milestones.models import Milestone
 from apps.projects.models import Label, Note, Project, ProjectMember
@@ -273,12 +273,6 @@ class Command(BaseCommand):
             issue.save()
 
     def _github(self, projects, issue_by_title, users):
-        # A placeholder connection so Settings shows the "connected" state. The id is far above any
-        # real GitHub user id and the token is not a credential — it only exists in the demo database.
-        GitHubAccount.objects.update_or_create(
-            user=users["jane.dev"],
-            defaults={"github_user_id": 9_999_999_999, "github_username": "jane-cooper", "access_token": "demo-placeholder-not-a-token", "scope": "repo"},
-        )
         for name, (project, _specs, repo) in projects.items():
             if not repo:
                 continue

@@ -325,3 +325,247 @@ class OAuthScopeTests(TestCase):
 
         query = parse_qs(urlparse(build_authorize_url("state123")).query)
         self.assertEqual(query["scope"], ["public_repo admin:repo_hook"])
+
+
+from unittest.mock import patch  # noqa: E402
+
+from apps.projects.models import Label, ProjectMember  # noqa: E402
+
+from .models import GitHubPullRequest  # noqa: E402
+
+
+class GitHubFlowBase(TestCase):
+    """A workspace admin with a (fake) connected GitHub account."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="gfadmin", email="gfadmin@example.com", password="pw")
+        self.member = User.objects.create_user(username="gfmember", email="gfmember@example.com", password="pw")
+        self.workspace = Workspace.objects.create(name="GFWS", owner=self.user)
+        Membership.objects.create(workspace=self.workspace, user=self.user, role="owner")
+        Membership.objects.create(workspace=self.workspace, user=self.member, role="member")
+        GitHubAccount.objects.create(user=self.user, github_user_id=501, github_username="gfadmin-gh", access_token="tok")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+
+@override_settings(GITHUB_WEBHOOK_CALLBACK_URL="http://localhost:8000/api/v1/integrations/github/webhook/")
+class LinkWithoutPublicWebhookTests(GitHubFlowBase):
+    def test_linking_works_when_the_server_is_not_publicly_reachable(self):
+        project = Project.objects.create(workspace=self.workspace, name="P", owner=self.user)
+        with patch("apps.integrations.views.services.create_webhook") as create_webhook:
+            response = self.client.post(
+                reverse("project-github-link", kwargs={"project_id": project.id}),
+                {"github_repo_id": 77, "full_name": "me/repo"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 201)
+        create_webhook.assert_not_called()  # GitHub would reject a localhost hook anyway
+        self.assertFalse(response.data["webhook_installed"])
+        self.assertEqual(response.data["webhook_warning"]["code"], "not_public_url")
+        self.assertTrue(GitHubRepositoryLink.objects.filter(project=project, webhook_id__isnull=True).exists())
+
+    @override_settings(GITHUB_WEBHOOK_CALLBACK_URL="https://devtrack.example.com/api/v1/integrations/github/webhook/")
+    def test_a_rejected_webhook_still_links_and_reports_githubs_reason(self):
+        from .services import GitHubAPIError
+
+        project = Project.objects.create(workspace=self.workspace, name="P2", owner=self.user)
+        with patch("apps.integrations.views.services.create_webhook", side_effect=GitHubAPIError("GitHub refused: Not Found")):
+            response = self.client.post(
+                reverse("project-github-link", kwargs={"project_id": project.id}),
+                {"github_repo_id": 78, "full_name": "me/other"},
+                format="json",
+            )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["webhook_warning"], {"code": "github_rejected", "detail": "GitHub refused: Not Found"})
+
+    @override_settings(GITHUB_WEBHOOK_CALLBACK_URL="https://devtrack.example.com/api/v1/integrations/github/webhook/")
+    def test_a_public_server_installs_the_webhook(self):
+        project = Project.objects.create(workspace=self.workspace, name="P3", owner=self.user)
+        with patch("apps.integrations.views.services.create_webhook", return_value={"id": 4242}):
+            response = self.client.post(
+                reverse("project-github-link", kwargs={"project_id": project.id}),
+                {"github_repo_id": 79, "full_name": "me/third"},
+                format="json",
+            )
+        self.assertTrue(response.data["webhook_installed"])
+        self.assertIsNone(response.data["webhook_warning"])
+
+
+class IsPublicUrlTests(TestCase):
+    def test_classifies_hosts(self):
+        from .services import is_public_url
+
+        self.assertFalse(is_public_url("http://localhost:8000/x"))
+        self.assertFalse(is_public_url("http://127.0.0.1:8000/x"))
+        self.assertFalse(is_public_url("http://printer.local/x"))
+        self.assertTrue(is_public_url("https://devtrack.onrender.com/x"))
+
+
+GITHUB_ISSUES = [
+    {"number": 1, "title": "Crash on start", "body": "Steps…", "state": "open", "html_url": "https://github.com/me/repo/issues/1",
+     "labels": [{"name": "bug", "color": "d73a4a"}], "assignee": {"login": "gfmember-gh"}},
+    {"number": 2, "title": "Add dark mode", "body": None, "state": "closed", "html_url": "https://github.com/me/repo/issues/2",
+     "labels": [{"name": "enhancement", "color": "a2eeef"}, {"name": "ui", "color": "ffffff"}], "assignee": None},
+]
+
+
+@override_settings(GITHUB_WEBHOOK_CALLBACK_URL="http://localhost:8000/x/")
+class ImportFromGitHubTests(GitHubFlowBase):
+    url = property(lambda self: reverse("github-import"))
+
+    def post(self, **overrides):
+        payload = {"workspace": self.workspace.id, "github_repo_id": 900, "full_name": "me/repo", **overrides}
+        with patch("apps.integrations.views.services.get_repo", return_value={"name": "repo", "description": "A repo", "html_url": "https://github.com/me/repo"}), \
+             patch("apps.integrations.views.services.list_repo_issues", return_value=GITHUB_ISSUES):
+            return self.client.post(self.url, payload, format="json")
+
+    def test_creates_a_project_links_the_repo_and_imports_issues(self):
+        gh_member = User.objects.get(username="gfmember")
+        GitHubAccount.objects.create(user=gh_member, github_user_id=502, github_username="gfmember-gh", access_token="t2")
+
+        response = self.post()
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["issues_imported"], 2)
+        project = Project.objects.get(pk=response.data["project"]["id"])
+        self.assertEqual((project.name, project.description, project.status), ("repo", "A repo", "active"))
+        self.assertEqual(project.repository_url, "https://github.com/me/repo")
+        self.assertTrue(ProjectMember.objects.filter(project=project, user=self.user, role="owner").exists())
+        self.assertEqual(project.github_link.full_name, "me/repo")
+
+        crash, dark = Issue.objects.get(project=project, github_number=1), Issue.objects.get(project=project, github_number=2)
+        self.assertEqual((crash.type, crash.status, crash.assignee), ("bug", "todo", gh_member))
+        self.assertEqual((dark.type, dark.status), ("feature", "done"))
+        self.assertEqual(dark.github_url, "https://github.com/me/repo/issues/2")
+        self.assertEqual({label.name for label in dark.labels.all()}, {"enhancement", "ui"})
+        self.assertTrue(Label.objects.filter(workspace=self.workspace, name="bug", color="#d73a4a").exists())
+
+    def test_issues_can_be_skipped(self):
+        response = self.post(import_issues=False)
+        self.assertEqual(response.status_code, 201)
+        # get_repo is still patched; list_repo_issues must not have been used to create issues
+        self.assertEqual(Issue.objects.filter(project_id=response.data["project"]["id"]).count(), 0)
+
+    def test_only_workspace_admins_can_import(self):
+        self.client.force_authenticate(self.member)
+        self.assertEqual(self.post().status_code, 403)
+
+    def test_requires_a_connected_github_account(self):
+        GitHubAccount.objects.filter(user=self.user).delete()
+        # a fresh instance: the reverse one-to-one is cached on the original object
+        self.client.force_authenticate(User.objects.get(pk=self.user.pk))
+        response = self.post()
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Connect your GitHub account", str(response.data))
+
+    def test_a_repository_can_only_be_imported_once(self):
+        self.assertEqual(self.post().status_code, 201)
+        self.assertEqual(self.post().status_code, 400)
+
+    def test_a_github_failure_leaves_nothing_behind(self):
+        from .services import GitHubAPIError
+
+        with patch("apps.integrations.views.services.get_repo", side_effect=GitHubAPIError("Could not read that repository: Not Found")):
+            response = self.client.post(
+                self.url, {"workspace": self.workspace.id, "github_repo_id": 901, "full_name": "me/missing"}, format="json"
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(Project.objects.filter(workspace=self.workspace).exists())
+
+
+class GitHubNumberMatchingTests(GitHubFlowBase):
+    def test_hash_references_use_githubs_numbering_in_imported_projects(self):
+        project = Project.objects.create(workspace=self.workspace, name="Imported", owner=self.user)
+        imported = Issue.objects.create(project=project, title="From GH", reporter=self.user, github_number=12)
+        native = Issue.objects.create(project=project, title="Native", reporter=self.user)  # its DevTrack id may be anything
+        link = GitHubRepositoryLink.objects.create(
+            project=project, github_repo_id=1, full_name="me/imp", webhook_id=None, connected_by=self.user
+        )
+        from .views import _match_issues
+
+        self.assertEqual(_match_issues(project, {12}), [imported])
+        self.assertEqual(_match_issues(project, {native.id}), [native])  # falls back to the DevTrack id
+        self.assertEqual(_match_issues(project, set()), [])
+        self.assertIsNotNone(link)
+
+
+class ManualSyncTests(GitHubFlowBase):
+    def setUp(self):
+        super().setUp()
+        self.project = Project.objects.create(workspace=self.workspace, name="Sync", owner=self.user)
+        self.issue = Issue.objects.create(project=self.project, title="Fix me", reporter=self.user, github_number=7)
+        GitHubRepositoryLink.objects.create(
+            project=self.project, github_repo_id=321, full_name="me/sync", webhook_id=None, connected_by=self.user
+        )
+        self.url = reverse("project-github-sync", kwargs={"project_id": self.project.id})
+
+    def sync(self, pulls, commits):
+        with patch("apps.integrations.views.services.list_repo_pulls", return_value=pulls), \
+             patch("apps.integrations.views.services.list_repo_commits", return_value=commits):
+            return self.client.post(self.url)
+
+    def test_pulls_commits_and_merges_are_processed_like_webhooks(self):
+        pulls = [{
+            "id": 9001, "number": 30, "title": "Fixes #7", "body": "", "state": "closed", "merged_at": "2026-09-20T10:00:00Z",
+            "html_url": "https://github.com/me/sync/pull/30", "user": {"login": "someone"}, "head": {"ref": "fix"}, "base": {"ref": "main"},
+        }]
+        commits = [{"sha": "abc1234" * 5 + "abcde", "commit": {"message": "Work on #7", "author": {"name": "Dev"}},
+                    "author": {"login": "dev"}, "html_url": "https://github.com/me/sync/commit/abc"}]
+
+        response = self.sync(pulls, commits)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, {"pull_requests": 1, "commits": 1})
+        self.issue.refresh_from_db()
+        self.assertEqual(self.issue.status, Issue.Status.DONE)  # merged PR closes it
+        pr = GitHubPullRequest.objects.get(number=30)
+        self.assertTrue(pr.merged)
+        self.assertEqual(list(pr.issues.all()), [self.issue])
+        self.assertEqual(GitHubCommit.objects.get().issues.get(), self.issue)
+        self.assertEqual(Activity.objects.filter(verb="pr_merged").count(), 1)
+
+    def test_syncing_twice_is_idempotent(self):
+        pulls = [{"id": 9002, "number": 31, "title": "WIP #7", "body": "", "state": "open", "merged_at": None,
+                  "html_url": "https://x/31", "user": {"login": "a"}, "head": {"ref": "h"}, "base": {"ref": "main"}}]
+        self.sync(pulls, [])
+        self.sync(pulls, [])
+        self.assertEqual(GitHubPullRequest.objects.filter(number=31).count(), 1)
+        self.issue.refresh_from_db()
+        self.assertNotEqual(self.issue.status, Issue.Status.DONE)  # an open PR does not close it
+
+    def test_github_errors_are_reported(self):
+        from .services import GitHubAPIError
+
+        with patch("apps.integrations.views.services.list_repo_pulls", side_effect=GitHubAPIError("Could not read the repository's pull requests: Not Found")):
+            response = self.client.post(self.url)
+        self.assertEqual(response.status_code, 400)
+
+    def test_unlinked_projects_and_outsiders(self):
+        other = Project.objects.create(workspace=self.workspace, name="Unlinked", owner=self.user)
+        self.assertEqual(self.client.post(reverse("project-github-sync", kwargs={"project_id": other.id})).status_code, 404)
+        outsider = User.objects.create_user(username="gfout", email="gfout@example.com", password="pw")
+        self.client.force_authenticate(outsider)
+        self.assertEqual(self.client.post(self.url).status_code, 403)
+
+
+class RepoListFlagsTests(TestCase):
+    def test_repos_without_admin_rights_are_listed_with_a_flag(self):
+        from .services import list_repo_issues, list_user_repos  # noqa: F401
+
+        payload = [
+            {"id": 1, "full_name": "me/mine", "private": False, "html_url": "https://github.com/me/mine", "permissions": {"admin": True}},
+            {"id": 2, "full_name": "org/theirs", "private": True, "html_url": "https://github.com/org/theirs", "permissions": {"admin": False}},
+        ]
+        with patch("apps.integrations.services.requests.get") as get:
+            get.return_value.status_code = 200
+            get.return_value.json.return_value = payload
+            repos = list_user_repos("tok")
+        self.assertEqual([(r["full_name"], r["admin"]) for r in repos], [("me/mine", True), ("org/theirs", False)])
+
+    def test_issue_listing_skips_pull_requests(self):
+        from .services import list_repo_issues
+
+        with patch("apps.integrations.services.requests.get") as get:
+            get.return_value.status_code = 200
+            get.return_value.json.return_value = [{"number": 1, "title": "issue"}, {"number": 2, "title": "pr", "pull_request": {}}]
+            self.assertEqual([i["number"] for i in list_repo_issues("tok", "me/repo")], [1])

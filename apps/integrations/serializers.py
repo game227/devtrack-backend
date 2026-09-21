@@ -7,11 +7,24 @@ from .models import GitHubCommit, GitHubPullRequest, GitHubRepositoryLink
 
 class GitHubRepositoryLinkSerializer(serializers.ModelSerializer):
     connected_by = UserBriefSerializer(read_only=True)
+    # False when the webhook could not be installed (e.g. the server is not publicly reachable):
+    # the repo is still linked and can be refreshed with a manual sync.
+    webhook_installed = serializers.SerializerMethodField()
 
     class Meta:
         model = GitHubRepositoryLink
-        fields = ["id", "project", "github_repo_id", "full_name", "connected_by", "created_at"]
+        fields = ["id", "project", "github_repo_id", "full_name", "webhook_installed", "connected_by", "created_at"]
         read_only_fields = fields
+
+    def get_webhook_installed(self, obj):
+        return obj.webhook_id is not None
+
+
+class GitHubImportSerializer(serializers.Serializer):
+    workspace = serializers.IntegerField()
+    github_repo_id = serializers.IntegerField()
+    full_name = serializers.RegexField(regex=r"^[\w.-]+/[\w.-]+$", max_length=255)
+    import_issues = serializers.BooleanField(required=False, default=True)
 
 
 class GitHubRepositoryLinkCreateSerializer(serializers.Serializer):

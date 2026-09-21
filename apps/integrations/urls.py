@@ -4,11 +4,13 @@ from .views import (
     GitHubCallbackView,
     GitHubConnectView,
     GitHubDisconnectView,
+    GitHubImportView,
     GitHubRepoListView,
     GitHubStatusView,
     GitHubWebhookView,
     IssueGitHubLinksView,
     ProjectGitHubLinkView,
+    ProjectGitHubSyncView,
 )
 
 urlpatterns = [
@@ -18,6 +20,8 @@ urlpatterns = [
     path("github/disconnect/", GitHubDisconnectView.as_view(), name="github-disconnect"),
     path("github/repos/", GitHubRepoListView.as_view(), name="github-repo-list"),
     path("github/webhook/", GitHubWebhookView.as_view(), name="github-webhook"),
+    path("github/import/", GitHubImportView.as_view(), name="github-import"),
     path("projects/<int:project_id>/github-link/", ProjectGitHubLinkView.as_view(), name="project-github-link"),
+    path("projects/<int:project_id>/github-sync/", ProjectGitHubSyncView.as_view(), name="project-github-sync"),
     path("issues/<int:issue_id>/github-links/", IssueGitHubLinksView.as_view(), name="issue-github-links"),
 ]

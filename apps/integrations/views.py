@@ -15,7 +15,8 @@ from rest_framework.views import APIView
 
 from apps.activities.models import Activity
 from apps.issues.models import Issue
-from apps.projects.models import Project
+from apps.projects.models import Label, Project, ProjectMember
+from apps.workspaces.models import Workspace
 from apps.workspaces.permissions import get_membership
 
 from . import services
@@ -23,6 +24,7 @@ from .models import GitHubAccount, GitHubCommit, GitHubPullRequest, GitHubReposi
 from .parsing import extract_issue_ids
 from .serializers import (
     GitHubCommitSerializer,
+    GitHubImportSerializer,
     GitHubPullRequestSerializer,
     GitHubRepositoryLinkCreateSerializer,
     GitHubRepositoryLinkSerializer,
@@ -174,26 +176,8 @@ class ProjectGitHubLinkView(APIView):
         if GitHubRepositoryLink.objects.filter(github_repo_id=github_repo_id).exists():
             raise ValidationError({"detail": "This repository is already linked to another project."})
 
-        try:
-            hook = services.create_webhook(
-                account.access_token,
-                full_name,
-                settings.GITHUB_WEBHOOK_CALLBACK_URL,
-                settings.GITHUB_WEBHOOK_SECRET,
-            )
-        except services.GitHubAPIError as exc:
-            raise ValidationError({"detail": str(exc)})
-
-        link = GitHubRepositoryLink.objects.create(
-            project=project,
-            github_repo_id=github_repo_id,
-            full_name=full_name,
-            webhook_id=hook.get("id"),
-            connected_by=request.user,
-        )
-        project.repository_url = f"https://github.com/{full_name}"
-        project.save(update_fields=["repository_url"])
-        return Response(GitHubRepositoryLinkSerializer(link).data, status=status.HTTP_201_CREATED)
+        link, warning = _link_repository(project, request.user, account, github_repo_id, full_name)
+        return Response(_link_response(link, warning), status=status.HTTP_201_CREATED)
 
     def delete(self, request, project_id):
         project = get_object_or_404(Project, pk=project_id)
@@ -239,6 +223,54 @@ def _verify_signature(body, header):
     return hmac.compare_digest(expected, header)
 
 
+def _link_repository(project, user, account, github_repo_id, full_name):
+    """Link a repository to a project and try to install its webhook.
+
+    The webhook is best-effort: GitHub refuses hooks that point at localhost or a private host, and
+    plenty of users lack admin rights on the repo. The link is created either way (a manual sync
+    still works); the returned warning says why live updates are off.
+    """
+    webhook_id, warning = None, None
+    callback_url = settings.GITHUB_WEBHOOK_CALLBACK_URL
+    if not services.is_public_url(callback_url):
+        warning = {"code": "not_public_url", "detail": callback_url}
+    else:
+        try:
+            hook = services.create_webhook(account.access_token, full_name, callback_url, settings.GITHUB_WEBHOOK_SECRET)
+            webhook_id = hook.get("id")
+        except services.GitHubAPIError as exc:
+            warning = {"code": "github_rejected", "detail": str(exc)}
+
+    link = GitHubRepositoryLink.objects.create(
+        project=project,
+        github_repo_id=github_repo_id,
+        full_name=full_name,
+        webhook_id=webhook_id,
+        connected_by=user,
+    )
+    project.repository_url = f"https://github.com/{full_name}"
+    project.save(update_fields=["repository_url"])
+    return link, warning
+
+
+def _link_response(link, warning):
+    return {**GitHubRepositoryLinkSerializer(link).data, "webhook_warning": warning}
+
+
+def _match_issues(project, ids):
+    """Issues of `project` that `#<id>` references point at.
+
+    In a project with imported GitHub issues, `#12` means GitHub's issue 12 (that is what people type
+    in commits); otherwise it is the DevTrack issue id. GitHub numbering wins when both exist.
+    """
+    if not ids:
+        return []
+    by_number = list(Issue.objects.filter(project=project, github_number__in=ids))
+    remaining = set(ids) - {issue.github_number for issue in by_number}
+    by_id = list(Issue.objects.filter(project=project, id__in=remaining)) if remaining else []
+    return by_number + by_id
+
+
 def _upsert(model, retry_once=True, **kwargs):
     # update_or_create's get-then-create isn't atomic: two near-simultaneous
     # webhook deliveries for the same (repo_link, sha/github_pr_id) can both
@@ -266,7 +298,7 @@ def _resolve_actor(pr_data, repo_link):
 def _handle_push(repo_link, payload):
     for commit in payload.get("commits", []):
         ids = extract_issue_ids(commit.get("message", ""))
-        matched = Issue.objects.filter(id__in=ids, project=repo_link.project)
+        matched = _match_issues(repo_link.project, ids)
         author = commit.get("author") or {}
         commit_obj, _ = _upsert(
             GitHubCommit,
@@ -285,7 +317,7 @@ def _handle_push(repo_link, payload):
 def _handle_pull_request(repo_link, payload):
     pr_data = payload.get("pull_request", {})
     ids = extract_issue_ids(pr_data.get("title", ""), pr_data.get("body") or "")
-    matched = list(Issue.objects.filter(id__in=ids, project=repo_link.project))
+    matched = _match_issues(repo_link.project, ids)
 
     pr, _ = _upsert(
         GitHubPullRequest,
@@ -379,3 +411,169 @@ def _safely(handler, repo_link, payload):
         # rather than 500. GitHub disables a hook after repeated non-2xx
         # responses, and a shape we don't recognize isn't the sender's fault.
         pass
+
+
+def _repo_token(link, requester):
+    """The token used to read a linked repo: its connector's, else the requester's."""
+    for user in (link.connected_by, requester):
+        account = getattr(user, "github_account", None)
+        if account is not None:
+            return account.access_token
+    return None
+
+
+def _pull_request_payload(pr):
+    # REST list items carry merged_at instead of the webhook's `merged` boolean.
+    merged = bool(pr.get("merged_at"))
+    return {
+        "action": "closed" if pr.get("state") == "closed" else "synchronize",
+        "pull_request": {**pr, "merged": merged},
+    }
+
+
+def _commit_payload(item):
+    commit = item.get("commit") or {}
+    author = commit.get("author") or {}
+    return {
+        "id": item["sha"],
+        "message": commit.get("message", ""),
+        "author": {"username": (item.get("author") or {}).get("login", ""), "name": author.get("name", "")},
+        "url": item.get("html_url", ""),
+    }
+
+
+class ProjectGitHubSyncView(APIView):
+    """Pull recent pull requests and commits from GitHub and process them exactly like webhook deliveries.
+
+    This is how a linked project stays current when webhooks cannot reach the server (local
+    development, or a repo the user has no admin rights on).
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, project_id):
+        project = get_object_or_404(Project, pk=project_id)
+        _require_workspace_member(request.user, project.workspace)
+        link = getattr(project, "github_link", None)
+        if link is None:
+            raise NotFound("This project has no linked GitHub repository.")
+        token = _repo_token(link, request.user)
+        if token is None:
+            raise ValidationError({"detail": "Connect your GitHub account first."})
+
+        try:
+            pulls = services.list_repo_pulls(token, link.full_name)
+            commits = services.list_repo_commits(token, link.full_name)
+        except services.GitHubAPIError as exc:
+            raise ValidationError({"detail": str(exc)})
+
+        # Oldest first so a merge is applied after the PR was first seen.
+        for pr in reversed(pulls):
+            _safely(_handle_pull_request, link, _pull_request_payload(pr))
+        for item in reversed(commits):
+            _safely(_handle_push, link, {"commits": [_commit_payload(item)]})
+        return Response({"pull_requests": len(pulls), "commits": len(commits)})
+
+
+ISSUE_TYPE_BY_LABEL = {
+    "bug": Issue.Type.BUG,
+    "enhancement": Issue.Type.FEATURE,
+    "feature": Issue.Type.FEATURE,
+    "improvement": Issue.Type.IMPROVEMENT,
+    "chore": Issue.Type.CHORE,
+}
+
+
+def _import_issues(project, user, workspace, github_issues):
+    labels_cache, assignee_cache = {}, {}
+
+    def label_for(data):
+        name = (data.get("name") or "")[:50]
+        if name and name not in labels_cache:
+            color = "#" + (data.get("color") or "6b7280")
+            labels_cache[name], _ = Label.objects.get_or_create(
+                workspace=workspace, project=None, name=name, defaults={"color": color[:7]}
+            )
+        return labels_cache.get(name)
+
+    def assignee_for(login):
+        if not login:
+            return None
+        if login not in assignee_cache:
+            account = GitHubAccount.objects.filter(github_username__iexact=login).select_related("user").first()
+            assignee_cache[login] = account.user if account and get_membership(account.user, workspace) else None
+        return assignee_cache[login]
+
+    imported = 0
+    for item in github_issues:
+        label_data = item.get("labels") or []
+        issue_type = next(
+            (ISSUE_TYPE_BY_LABEL[l["name"].lower()] for l in label_data if l.get("name", "").lower() in ISSUE_TYPE_BY_LABEL),
+            Issue.Type.TASK,
+        )
+        body = item.get("body") or ""
+        issue = Issue.objects.create(
+            project=project,
+            title=(item.get("title") or f"GitHub issue #{item['number']}")[:200],
+            description=body,
+            type=issue_type,
+            status=Issue.Status.DONE if item.get("state") == "closed" else Issue.Status.TODO,
+            reporter=user,
+            assignee=assignee_for((item.get("assignee") or {}).get("login")),
+            github_number=item["number"],
+            github_url=item.get("html_url", ""),
+        )
+        issue.labels.set([label for label in (label_for(l) for l in label_data) if label is not None])
+        imported += 1
+    return imported
+
+
+class GitHubImportView(APIView):
+    """Turn a GitHub repository into a DevTrack project: create it, link the repo and (optionally)
+    import the repository's issues."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = GitHubImportSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        workspace = get_object_or_404(Workspace, pk=data["workspace"])
+        _require_workspace_admin(request.user, workspace)
+        account = getattr(request.user, "github_account", None)
+        if account is None:
+            raise ValidationError({"detail": "Connect your GitHub account first."})
+        if GitHubRepositoryLink.objects.filter(github_repo_id=data["github_repo_id"]).exists():
+            raise ValidationError({"detail": "This repository is already linked to another project."})
+
+        # Everything that talks to GitHub and can fail is read first, so a failure leaves nothing behind.
+        try:
+            repo = services.get_repo(account.access_token, data["full_name"])
+            github_issues = (
+                services.list_repo_issues(account.access_token, data["full_name"]) if data["import_issues"] else []
+            )
+        except services.GitHubAPIError as exc:
+            raise ValidationError({"detail": str(exc)})
+
+        with transaction.atomic():
+            project = Project.objects.create(
+                workspace=workspace,
+                name=(repo.get("name") or data["full_name"].split("/")[-1])[:150],
+                description=repo.get("description") or "",
+                status=Project.Status.ACTIVE,
+                owner=request.user,
+                repository_url=repo.get("html_url", ""),
+            )
+            ProjectMember.objects.create(project=project, user=request.user, role="owner")
+            imported = _import_issues(project, request.user, workspace, github_issues)
+
+        link, warning = _link_repository(project, request.user, account, data["github_repo_id"], data["full_name"])
+        return Response(
+            {
+                "project": {"id": project.id, "name": project.name},
+                "issues_imported": imported,
+                "link": _link_response(link, warning),
+            },
+            status=status.HTTP_201_CREATED,
+        )

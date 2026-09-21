@@ -1,4 +1,4 @@
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import requests
 from django.conf import settings
@@ -76,10 +76,17 @@ def list_user_repos(access_token):
         repos.extend(batch)
         if len(batch) < 100:
             break
+    # Every repository the user can see. `admin` tells the UI whether a webhook can be installed
+    # (needs admin rights); importing and syncing only need read access.
     return [
-        {"id": repo["id"], "full_name": repo["full_name"], "private": repo["private"], "html_url": repo["html_url"]}
+        {
+            "id": repo["id"],
+            "full_name": repo["full_name"],
+            "private": repo["private"],
+            "html_url": repo["html_url"],
+            "admin": bool((repo.get("permissions") or {}).get("admin")),
+        }
         for repo in repos
-        if repo.get("permissions", {}).get("admin")
     ]
 
 
@@ -96,7 +103,7 @@ def create_webhook(access_token, full_name, callback_url, secret):
         timeout=REQUEST_TIMEOUT,
     )
     if response.status_code != 201:
-        raise GitHubAPIError("Failed to create a webhook on that repository. Do you have admin access to it?")
+        raise GitHubAPIError(f"GitHub refused to create the webhook: {_github_message(response)}")
     return response.json()
 
 
@@ -110,3 +117,73 @@ def delete_webhook(access_token, full_name, webhook_id):
     )
     if response.status_code not in (204, 404):
         raise GitHubAPIError("Failed to delete the webhook on that repository.")
+
+
+def _github_message(response):
+    """GitHub's own explanation of an error, e.g. "Not Found" or a validation error list."""
+    try:
+        data = response.json()
+    except ValueError:
+        return f"HTTP {response.status_code}"
+    message = data.get("message", f"HTTP {response.status_code}")
+    details = [str(e.get("message") or e) for e in data.get("errors", []) if isinstance(e, (dict, str))]
+    return f"{message} ({'; '.join(details)})" if details else message
+
+
+def is_public_url(url):
+    """GitHub cannot deliver webhooks to localhost / private hosts."""
+    host = (urlparse(url).hostname or "").lower()
+    return bool(host) and host not in ("localhost", "127.0.0.1", "0.0.0.0", "::1") and not host.endswith(".local")
+
+
+def get_repo(access_token, full_name):
+    response = requests.get(f"{GITHUB_API_BASE}/repos/{full_name}", headers=_headers(access_token), timeout=REQUEST_TIMEOUT)
+    if response.status_code != 200:
+        raise GitHubAPIError(f"Could not read that repository: {_github_message(response)}")
+    return response.json()
+
+
+MAX_IMPORT_ISSUES = 300  # import cap: 3 pages of 100
+
+
+def list_repo_issues(access_token, full_name):
+    """Issues of a repository, oldest first, without pull requests (GitHub lists PRs as issues too)."""
+    issues = []
+    for page in range(1, MAX_IMPORT_ISSUES // 100 + 1):
+        response = requests.get(
+            f"{GITHUB_API_BASE}/repos/{full_name}/issues",
+            headers=_headers(access_token),
+            params={"state": "all", "per_page": 100, "page": page, "sort": "created", "direction": "asc"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code != 200:
+            raise GitHubAPIError(f"Could not read the repository's issues: {_github_message(response)}")
+        batch = response.json()
+        issues.extend(item for item in batch if "pull_request" not in item)
+        if len(batch) < 100:
+            break
+    return issues
+
+
+def list_repo_pulls(access_token, full_name, limit=30):
+    response = requests.get(
+        f"{GITHUB_API_BASE}/repos/{full_name}/pulls",
+        headers=_headers(access_token),
+        params={"state": "all", "per_page": limit, "sort": "updated", "direction": "desc"},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if response.status_code != 200:
+        raise GitHubAPIError(f"Could not read the repository's pull requests: {_github_message(response)}")
+    return response.json()
+
+
+def list_repo_commits(access_token, full_name, limit=30):
+    response = requests.get(
+        f"{GITHUB_API_BASE}/repos/{full_name}/commits",
+        headers=_headers(access_token),
+        params={"per_page": limit},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if response.status_code != 200:
+        raise GitHubAPIError(f"Could not read the repository's commits: {_github_message(response)}")
+    return response.json()

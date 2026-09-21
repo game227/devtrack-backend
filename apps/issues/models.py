@@ -48,6 +48,9 @@ class Issue(models.Model):
     )
     labels = models.ManyToManyField("projects.Label", related_name="issues", blank=True)
     due_date = models.DateField(null=True, blank=True)
+    # Set on issues imported from GitHub: lets `#12` in a commit/PR refer to GitHub's own numbering.
+    github_number = models.PositiveIntegerField(null=True, blank=True)
+    github_url = models.URLField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
