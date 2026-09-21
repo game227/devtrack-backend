@@ -2,7 +2,7 @@ from .base import *  # noqa: F401,F403
 
 DEBUG = False
 
-# Railway (and most PaaS) terminate TLS at the edge and forward plain HTTP
+# Render (and most PaaS) terminate TLS at the edge and forward plain HTTP
 # with this header set — without telling Django, request.is_secure() would
 # always read False behind the proxy, breaking secure-cookie/CSRF behavior.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
