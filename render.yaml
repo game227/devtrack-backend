@@ -4,6 +4,16 @@ databases:
     user: devtrack
     plan: free
 
+# Values that must be identical on the backend and the bot. Render generates
+# them once and injects the same value into both services.
+envVarGroups:
+  - name: devtrack-shared-secrets
+    envVars:
+      - key: BOT_SERVICE_API_KEY
+        generateValue: true
+      - key: TELEGRAM_LINK_SECRET
+        generateValue: true
+
 services:
   - type: web
     name: devtrack-backend
@@ -46,8 +56,46 @@ services:
       # Fernet key for GitHubAccount.access_token encryption at rest — paste
       # the value shared with you separately, or generate a fresh one with:
       # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      # Several comma-separated keys are accepted (first encrypts, all decrypt) so the
+      # key can be rotated: `manage.py rotate_encryption_key`.
       - key: FIELD_ENCRYPTION_KEY
         sync: false
+      # Password-reset email (Resend SMTP). onboarding@resend.dev only delivers to the
+      # Resend account owner until a sending domain is verified.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        value: onboarding@resend.dev
+      # Telegram bot service (below): the backend only needs the bot's @username and URL.
+      - key: TELEGRAM_BOT_USERNAME
+        sync: false
+      - key: TELEGRAM_BOT_SERVICE_URL
+        value: https://devtrack-telegram-bot.onrender.com
+      - fromGroup: devtrack-shared-secrets
+      # Opt-in HSTS (seconds). Leave at 0 until HTTPS/domain are stable, then ramp up.
+      - key: SECURE_HSTS_SECONDS
+        value: "0"
+
+  # SQLite lives on a persistent disk, which Render only offers on paid plans.
+  - type: web
+    name: devtrack-telegram-bot
+    runtime: docker
+    repo: https://github.com/game227/devtrack-telegram-bot
+    dockerCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    plan: starter
+    healthCheckPath: /health
+    disk:
+      name: devtrack-bot-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_PATH
+        value: /var/data/bot.db
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        generateValue: true
+      - fromGroup: devtrack-shared-secrets
 
   - type: web
     name: devtrack-frontend
