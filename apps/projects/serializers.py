@@ -38,13 +38,14 @@ class ProjectMemberSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProjectMember
-        fields = ["id", "user", "role", "added_at"]
+        fields = ["id", "user", "role", "specialty", "added_at"]
         read_only_fields = ["id", "added_at"]
 
 
 class ProjectMemberCreateSerializer(serializers.Serializer):
     username = serializers.CharField()
     role = serializers.CharField(required=False, allow_blank=True, default="")
+    specialty = serializers.ChoiceField(choices=ProjectMember.Specialty.choices, required=False, allow_blank=True, default="")
 
     def validate_username(self, value):
         try:
@@ -63,8 +64,15 @@ class ProjectMemberCreateSerializer(serializers.Serializer):
     def save(self):
         project = self.context["project"]
         return ProjectMember.objects.create(
-            project=project, user=self.validated_data["user"], role=self.validated_data.get("role", "")
+            project=project,
+            user=self.validated_data["user"],
+            role=self.validated_data.get("role", ""),
+            specialty=self.validated_data.get("specialty", ""),
         )
+
+
+class ProjectMemberUpdateSerializer(serializers.Serializer):
+    specialty = serializers.ChoiceField(choices=ProjectMember.Specialty.choices, allow_blank=True)
 
 
 class LabelSerializer(serializers.ModelSerializer):

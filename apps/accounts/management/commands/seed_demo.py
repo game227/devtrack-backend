@@ -31,7 +31,17 @@ PEOPLE = [
     ("alex.k", "Alex", "Karimov", "Backend engineer", "admin"),
     ("priya.s", "Priya", "Sharma", "Frontend engineer", "member"),
     ("sam.m", "Sam", "Morgan", "QA & DevOps", "member"),
+    ("dilnoza.r", "Dilnoza", "Rahimova", "Product designer", "member"),
 ]
+
+# What each person does on the demo projects (ProjectMember.specialty).
+SPECIALTY = {
+    "jane.dev": "backend",
+    "alex.k": "backend",
+    "priya.s": "frontend",
+    "sam.m": "debugger",
+    "dilnoza.r": "designer",
+}
 
 LABELS = [
     ("backend", "#baa7ff"),
@@ -161,7 +171,14 @@ class Command(BaseCommand):
                 repository_url=f"https://github.com/{repo}" if repo else "",
             )
             for user in users.values():
-                ProjectMember.objects.get_or_create(project=project, user=user, defaults={"role": "member"})
+                ProjectMember.objects.update_or_create(
+                    project=project,
+                    user=user,
+                    defaults={
+                        "role": "owner" if user == users["jane.dev"] else "member",
+                        "specialty": SPECIALTY.get(user.username, ""),
+                    },
+                )
             projects[name] = (project, issues, repo)
 
         issue_by_title = {}
@@ -277,7 +294,7 @@ class Command(BaseCommand):
             if not repo:
                 continue
             link = GitHubRepositoryLink.objects.create(
-                project=project, github_repo_id=900000 + project.id, full_name=repo, webhook_id=1,
+                project=project, github_repo_id=900000 + project.id, full_name=repo, webhook_id=None,
                 connected_by=users["jane.dev"],
             )
             if name == "Payments API v2":

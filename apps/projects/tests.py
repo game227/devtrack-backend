@@ -188,3 +188,56 @@ class NoteViewTests(TestCase):
         client.force_authenticate(self.owner)
         response = client.patch(self.detail_url, {"title": "Updated by owner"}, format="json")
         self.assertEqual(response.status_code, 200)
+
+
+class ProjectMemberSpecialtyTests(TestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+
+        self.owner = User.objects.create_user(username="spowner", email="spowner@example.com", password="pw")
+        self.dev = User.objects.create_user(username="spdev", email="spdev@example.com", password="pw")
+        self.outsider = User.objects.create_user(username="spout", email="spout@example.com", password="pw")
+        self.workspace = Workspace.objects.create(name="SPWS", owner=self.owner)
+        Membership.objects.create(workspace=self.workspace, user=self.owner, role=Membership.Role.OWNER)
+        Membership.objects.create(workspace=self.workspace, user=self.dev, role=Membership.Role.MEMBER)
+        self.project = Project.objects.create(workspace=self.workspace, name="P", owner=self.owner)
+        ProjectMember.objects.create(project=self.project, user=self.owner, role="owner")
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+        self.list_url = reverse("project-members", kwargs={"pk": self.project.pk})
+
+    def detail_url(self, user):
+        return reverse("project-member-detail", kwargs={"pk": self.project.pk, "user_id": user.pk})
+
+    def test_each_specialty_can_be_assigned_when_adding_a_member(self):
+        for value in ("frontend", "backend", "debugger", "designer"):
+            user = User.objects.create_user(username=f"sp_{value}", email=f"sp_{value}@example.com", password="pw")
+            response = self.client.post(self.list_url, {"username": user.username, "specialty": value}, format="json")
+            self.assertEqual(response.status_code, 201)
+            self.assertEqual(response.data["specialty"], value)
+
+    def test_specialty_is_optional_and_unknown_values_are_rejected(self):
+        ok = self.client.post(self.list_url, {"username": "spdev"}, format="json")
+        self.assertEqual((ok.status_code, ok.data["specialty"]), (201, ""))
+        other = User.objects.create_user(username="spx", email="spx@example.com", password="pw")
+        bad = self.client.post(self.list_url, {"username": "spx", "specialty": "wizard"}, format="json")
+        self.assertEqual(bad.status_code, 400)
+        self.assertFalse(ProjectMember.objects.filter(user=other).exists())
+
+    def test_specialty_can_be_changed_and_cleared(self):
+        ProjectMember.objects.create(project=self.project, user=self.dev, role="member", specialty="backend")
+        changed = self.client.patch(self.detail_url(self.dev), {"specialty": "designer"}, format="json")
+        self.assertEqual((changed.status_code, changed.data["specialty"]), (200, "designer"))
+        cleared = self.client.patch(self.detail_url(self.dev), {"specialty": ""}, format="json")
+        self.assertEqual(cleared.data["specialty"], "")
+        self.assertEqual(self.client.patch(self.detail_url(self.dev), {"specialty": "nope"}, format="json").status_code, 400)
+
+    def test_members_list_exposes_specialty_and_only_managers_can_change_it(self):
+        ProjectMember.objects.create(project=self.project, user=self.dev, role="member", specialty="debugger")
+        listing = self.client.get(self.list_url)
+        self.assertIn("debugger", [m["specialty"] for m in listing.data["results"]])
+
+        self.client.force_authenticate(self.dev)  # a plain member
+        self.assertEqual(self.client.patch(self.detail_url(self.dev), {"specialty": "frontend"}, format="json").status_code, 403)
+        self.client.force_authenticate(self.outsider)
+        self.assertEqual(self.client.patch(self.detail_url(self.dev), {"specialty": "frontend"}, format="json").status_code, 403)

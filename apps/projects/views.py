@@ -18,6 +18,7 @@ from .serializers import (
     NoteSerializer,
     ProjectMemberCreateSerializer,
     ProjectMemberSerializer,
+    ProjectMemberUpdateSerializer,
     ProjectSerializer,
 )
 
@@ -82,6 +83,16 @@ class ProjectMembersView(generics.ListCreateAPIView):
 
 class ProjectMemberDetailView(APIView):
     permission_classes = [IsAuthenticated, CanManageProject]
+
+    def patch(self, request, pk, user_id):
+        project = get_object_or_404(Project, pk=pk)
+        self.check_object_permissions(request, project)
+        member = get_object_or_404(ProjectMember, project=project, user_id=user_id)
+        serializer = ProjectMemberUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        member.specialty = serializer.validated_data["specialty"]
+        member.save(update_fields=["specialty"])
+        return Response(ProjectMemberSerializer(member).data)
 
     def delete(self, request, pk, user_id):
         project = get_object_or_404(Project, pk=pk)

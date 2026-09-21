@@ -48,6 +48,16 @@ class ProjectMember(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="project_memberships"
     )
     role = models.CharField(max_length=20, blank=True)
+
+    class Specialty(models.TextChoices):
+        FRONTEND = "frontend", "Frontend developer"
+        BACKEND = "backend", "Backend developer"
+        DEBUGGER = "debugger", "Debugger"
+        DESIGNER = "designer", "Designer"
+
+    # What the person does on this project. Separate from `role` (permission level) on purpose:
+    # someone can be an admin and a designer, and be backend on one project and a debugger on another.
+    specialty = models.CharField(max_length=20, choices=Specialty.choices, blank=True)
     added_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
