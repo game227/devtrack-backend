@@ -132,11 +132,12 @@ class NotificationActorTests(TestCase):
         issue = Issue.objects.create(project=project, title="Bug", reporter=reporter, assignee=other)
         Notification.objects.all().delete()
 
-        client = APIClient()
-        client.force_authenticate(other)
-        response = client.patch(
-            reverse("issue-detail", kwargs={"pk": issue.pk}), {"assignee_id": reporter.pk}, format="json"
-        )
+        # _actor models "whoever performed the change" in general (the GitHub PR-merge handler
+        # sets it to a resolved GitHub author, for instance) — exercised directly at the model
+        # layer since the issue-detail API itself now only lets the reporter make this change
+        # (IsIssueReporter), so `other` reassigning it could no longer happen through the view.
+        issue.assignee = reporter
+        issue._actor = other
+        issue.save()
 
-        self.assertEqual(response.status_code, 200)
         self.assertTrue(Notification.objects.filter(recipient=reporter, verb="issue_assigned").exists())

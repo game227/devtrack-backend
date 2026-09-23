@@ -10,7 +10,7 @@ from apps.workspaces.permissions import get_membership
 
 from .filters import IssueFilter
 from .models import Issue
-from .permissions import CanDeleteIssue, IsIssueWorkspaceMember
+from .permissions import CanDeleteIssue, IsIssueReporter, IsIssueWorkspaceMember
 from .serializers import IssueSerializer
 
 
@@ -59,4 +59,8 @@ class IssueDetailView(generics.RetrieveUpdateDestroyAPIView):
     def get_permissions(self):
         if self.request.method == "DELETE":
             return [IsAuthenticated(), CanDeleteIssue()]
+        # Board/detail edits (drag-to-move, status/priority/assignee/description changes) are
+        # restricted to the issue's creator — anyone in the workspace can still read it.
+        if self.request.method in ("PUT", "PATCH"):
+            return [IsAuthenticated(), IsIssueReporter()]
         return [IsAuthenticated(), IsIssueWorkspaceMember()]

@@ -60,10 +60,14 @@ class CommentDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def check_object_permissions(self, request, obj):
         super().check_object_permissions(request, obj)
+        # Reading a comment still requires workspace membership — without this, any
+        # authenticated user could GET /comments/<id>/ for a comment in a workspace they
+        # have no connection to at all, since the queryset above isn't scoped by workspace.
+        membership = get_membership(request.user, comment_target_workspace(obj.content_object))
+        if membership is None:
+            raise PermissionDenied("You are not a member of this workspace.")
         if request.method in ("PUT", "PATCH", "DELETE"):
             if obj.author_id == request.user.id:
                 return
-            workspace = comment_target_workspace(obj.content_object)
-            membership = get_membership(request.user, workspace)
-            if membership is None or membership.role not in (Membership.Role.OWNER, Membership.Role.ADMIN):
+            if membership.role not in (Membership.Role.OWNER, Membership.Role.ADMIN):
                 raise PermissionDenied("Only the comment's author or a workspace admin/owner can do that.")

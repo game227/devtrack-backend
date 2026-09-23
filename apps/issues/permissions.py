@@ -22,3 +22,15 @@ class CanDeleteIssue(BasePermission):
             Membership.Role.OWNER,
             Membership.Role.ADMIN,
         )
+
+
+class IsIssueReporter(BasePermission):
+    """Object-level check: request.user is the issue's reporter (the user who created it).
+
+    Editing (PUT/PATCH) is deliberately narrower than deleting (CanDeleteIssue above): a
+    workspace admin/owner can remove a stuck issue, but cannot edit someone else's issue out
+    from under them.
+    """
+
+    def has_object_permission(self, request, view, obj):
+        return obj.reporter_id == request.user.id

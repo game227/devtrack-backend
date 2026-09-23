@@ -119,12 +119,29 @@ class IssueDetailViewTests(TestCase):
         self.url = reverse("issue-detail", kwargs={"pk": self.issue.pk})
         self.client = APIClient()
 
-    def test_any_workspace_member_can_view_and_update(self):
+    def test_any_workspace_member_can_view(self):
         self.client.force_authenticate(self.member)
         response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
+
+    def test_reporter_can_update_their_own_issue(self):
+        self.client.force_authenticate(self.reporter)
         response = self.client.patch(self.url, {"status": "in_progress"}, format="json")
         self.assertEqual(response.status_code, 200)
+
+    def test_non_reporter_member_cannot_update(self):
+        self.client.force_authenticate(self.member)
+        response = self.client.patch(self.url, {"status": "in_progress"}, format="json")
+        self.assertEqual(response.status_code, 403)
+        self.issue.refresh_from_db()
+        self.assertNotEqual(self.issue.status, "in_progress")
+
+    def test_workspace_admin_cannot_update_someone_elses_issue(self):
+        # Editing is narrower than deleting: an admin/owner can remove a stuck issue
+        # (test_admin_can_delete_someone_elses_issue below) but not edit it in place.
+        self.client.force_authenticate(self.owner)
+        response = self.client.patch(self.url, {"status": "in_progress"}, format="json")
+        self.assertEqual(response.status_code, 403)
 
     def test_reporter_can_delete(self):
         self.client.force_authenticate(self.reporter)

@@ -108,3 +108,16 @@ class CommentDetailViewTests(TestCase):
         self.client.force_authenticate(self.author)
         response = self.client.delete(self.url)
         self.assertEqual(response.status_code, 204)
+
+    def test_workspace_member_can_view(self):
+        self.client.force_authenticate(self.member)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_outsider_cannot_view_a_single_comment(self):
+        # Regression check: the queryset backing this view is unscoped (Comment.objects.all()),
+        # so without an object-level membership check GET would leak comments across workspaces.
+        outsider = User.objects.create_user(username="cdoutsider", email="cdoutsider@example.com", password="pw")
+        self.client.force_authenticate(outsider)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)

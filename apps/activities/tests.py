@@ -114,13 +114,24 @@ class ActivityActorTests(TestCase):
         self.client = APIClient()
 
     def test_a_status_change_is_attributed_to_the_user_who_made_it(self):
-        self.client.force_authenticate(self.mover)
+        # Only the reporter can PATCH an issue via the API now (IsIssueReporter) — but the
+        # _actor mechanism is general-purpose (the GitHub PR-merge handler also sets it, to a
+        # resolved GitHub author), so it's exercised directly at the model layer here rather
+        # than through a view that would reject a non-reporter's PATCH.
+        self.issue.status = Issue.Status.IN_PROGRESS
+        self.issue._actor = self.mover
+        self.issue.save()
+        activity = Activity.objects.get(verb="moved_issue", object_id=self.issue.id)
+        self.assertEqual(activity.actor, self.mover)  # not the reporter
+
+    def test_the_view_attributes_the_reporters_own_change_via_the_api(self):
+        self.client.force_authenticate(self.reporter)
         response = self.client.patch(
             reverse("issue-detail", kwargs={"pk": self.issue.pk}), {"status": "in_progress"}, format="json"
         )
         self.assertEqual(response.status_code, 200)
         activity = Activity.objects.get(verb="moved_issue", object_id=self.issue.id)
-        self.assertEqual(activity.actor, self.mover)  # not the reporter
+        self.assertEqual(activity.actor, self.reporter)
 
     def test_without_a_request_user_the_reporter_is_the_fallback(self):
         self.issue.status = Issue.Status.DONE
