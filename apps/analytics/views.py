@@ -1,3 +1,4 @@
+import datetime as dt
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
@@ -18,6 +19,8 @@ from apps.issues.models import Issue
 from apps.projects.models import Label, Project
 from apps.workspaces.models import Membership, Workspace
 from apps.workspaces.permissions import get_membership
+
+from .health import compute_project_health
 
 User = get_user_model()
 DONE_STATUS = Issue.Status.DONE
@@ -151,12 +154,8 @@ def _avatar_url(user):
     return user.avatar.url if user.avatar else None
 
 
-STALE_IN_PROGRESS_DAYS = 7
-ACTIVITY_DECAY_DAYS = 14
-
-
 class ProjectHealthView(APIView):
-    """Rule-based project health score — no AI, per spec §22."""
+    """Rule-based project health score — no AI, per spec §22. The formula lives in health.py."""
 
     permission_classes = [IsAuthenticated]
 
@@ -164,74 +163,7 @@ class ProjectHealthView(APIView):
         project = get_object_or_404(Project, pk=pk)
         if get_membership(request.user, project.workspace) is None:
             raise PermissionDenied("You are not a member of this project's workspace.")
-
-        today = timezone.localdate()
-        issues = Issue.objects.filter(project=project)
-        total = issues.count()
-        done = issues.filter(status=DONE_STATUS).count()
-
-        task_progress = round(done / total * 100) if total else 100
-
-        with_deadline = issues.exclude(due_date__isnull=True)
-        overdue_issues = with_deadline.exclude(status=DONE_STATUS).filter(due_date__lt=today)
-        deadline_health = (
-            round((with_deadline.count() - overdue_issues.count()) / with_deadline.count() * 100)
-            if with_deadline.exists()
-            else 100
-        )
-
-        open_bugs = issues.filter(type=Issue.Type.BUG).exclude(status=DONE_STATUS)
-        bug_rate_health = round(100 - open_bugs.count() / total * 100) if total else 100
-
-        # This project's own activity — not the whole workspace's, which would let a
-        # busy sibling project mask a stalled one.
-        last_activity = project_timeline_queryset(project).order_by("-created_at").first()
-        reference_date = last_activity.created_at.date() if last_activity else project.created_at.date()
-        days_stale = (today - reference_date).days
-        activity_health = max(0, min(100, round(100 - days_stale * (100 / ACTIVITY_DECAY_DAYS))))
-
-        overall = round((task_progress + deadline_health + bug_rate_health + activity_health) / 4)
-        if overall >= 80:
-            status_label = "healthy"
-        elif overall >= 50:
-            status_label = "needs_attention"
-        else:
-            status_label = "at_risk"
-
-        # Each risk is reported twice: as an English sentence (kept for existing
-        # clients) and as a structured code + counts the UI can localize.
-        risks = []
-        risk_details = []
-        stale_cutoff = today - timedelta(days=STALE_IN_PROGRESS_DAYS)
-        stale_count = issues.filter(status=Issue.Status.IN_PROGRESS, updated_at__date__lt=stale_cutoff).count()
-        if stale_count:
-            risks.append(
-                f"{stale_count} task(s) have been in progress for more than {STALE_IN_PROGRESS_DAYS} days."
-            )
-            risk_details.append({"code": "stale_in_progress", "count": stale_count, "days": STALE_IN_PROGRESS_DAYS})
-        overdue_count = overdue_issues.count()
-        if overdue_count:
-            risks.append(f"{overdue_count} issue(s) are past their due date.")
-            risk_details.append({"code": "overdue", "count": overdue_count})
-        urgent_bug_count = open_bugs.filter(priority__in=[Issue.Priority.HIGH, Issue.Priority.URGENT]).count()
-        if urgent_bug_count:
-            risks.append(f"{urgent_bug_count} unresolved high/urgent priority bug(s).")
-            risk_details.append({"code": "urgent_bugs", "count": urgent_bug_count})
-
-        return Response(
-            {
-                "score": overall,
-                "status": status_label,
-                "factors": {
-                    "task_progress": task_progress,
-                    "development_activity": activity_health,
-                    "deadline": deadline_health,
-                    "bug_rate": bug_rate_health,
-                },
-                "risks": risks,
-                "risk_details": risk_details,
-            }
-        )
+        return Response(compute_project_health(project))
 
 
 DEVELOPER_ACTIVITY_DAYS = 14
@@ -262,14 +194,22 @@ class DeveloperAnalyticsView(APIView):
         issues_resolved = issues_in_workspace.filter(reporter=target_user, status=DONE_STATUS).count()
         open_assigned = issues_in_workspace.filter(assignee=target_user).exclude(status=DONE_STATUS).count()
 
-        since = timezone.now() - timedelta(days=DEVELOPER_ACTIVITY_DAYS)
-        recent_activity = (
-            Activity.objects.filter(workspace=workspace, actor=target_user, created_at__gte=since)
+        # The last DEVELOPER_ACTIVITY_DAYS whole days (today included), every one of them present —
+        # a quiet day is a 0, not a gap the chart has to guess about.
+        today = timezone.localdate()
+        first_day = today - timedelta(days=DEVELOPER_ACTIVITY_DAYS - 1)
+        since = timezone.make_aware(dt.datetime.combine(first_day, dt.time.min))
+        counts = {
+            row["day"]: row["count"]
+            for row in Activity.objects.filter(workspace=workspace, actor=target_user, created_at__gte=since)
             .annotate(day=TruncDate("created_at"))
             .values("day")
             .annotate(count=Count("id"))
-            .order_by("day")
-        )
+        }
+        daily_activity = [
+            {"date": day, "count": counts.get(day, 0)}
+            for day in (first_day + timedelta(days=offset) for offset in range(DEVELOPER_ACTIVITY_DAYS))
+        ]
 
         return Response(
             {
@@ -279,6 +219,6 @@ class DeveloperAnalyticsView(APIView):
                 "tasks_completed": tasks_completed,
                 "issues_resolved": issues_resolved,
                 "open_assigned": open_assigned,
-                "daily_activity": [{"date": row["day"], "count": row["count"]} for row in recent_activity],
+                "daily_activity": daily_activity,
             }
         )
