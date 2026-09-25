@@ -72,6 +72,9 @@ services:
       - key: TELEGRAM_BOT_SERVICE_URL
         value: https://devtrack-telegram-bot.onrender.com
       - fromGroup: devtrack-shared-secrets
+      # Push in-app notifications (assignments, comments, mentions, invites) to linked Telegram chats.
+      - key: TELEGRAM_NOTIFICATIONS_ENABLED
+        value: "true"
       # Opt-in HSTS (seconds). Leave at 0 until HTTPS/domain are stable, then ramp up.
       - key: SECURE_HSTS_SECONDS
         value: "0"
@@ -109,3 +112,25 @@ services:
     routes:
       - source: /*
         destination: /index.html
+
+  # Morning Telegram digest: each linked user gets their overdue issues and those due today.
+  # 04:00 UTC = 09:00 in Tashkent. Same image and environment as the web service.
+  - type: cron
+    name: devtrack-telegram-digest
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    schedule: "0 4 * * *"
+    dockerCommand: python manage.py send_telegram_digest
+    plan: starter
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.prod
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: devtrack-db
+          property: connectionString
+      - key: TELEGRAM_BOT_SERVICE_URL
+        value: https://devtrack-telegram-bot.onrender.com
+      - fromGroup: devtrack-shared-secrets

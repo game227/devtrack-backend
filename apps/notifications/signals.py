@@ -9,6 +9,8 @@ from apps.issues.models import Issue
 from apps.projects.models import ProjectMember
 from apps.workspaces.models import Membership
 
+from apps.telegram_bot.notify import push_notification
+
 from .models import Notification
 
 User = get_user_model()
@@ -18,7 +20,8 @@ MENTION_RE = re.compile(r"@(\w+)")
 def _notify(recipient, actor, verb, target):
     if recipient is None or recipient_id_equals_actor(recipient, actor):
         return
-    Notification.objects.create(recipient=recipient, verb=verb, target=target)
+    notification = Notification.objects.create(recipient=recipient, verb=verb, target=target)
+    push_notification(notification, actor)
 
 
 def recipient_id_equals_actor(recipient, actor):

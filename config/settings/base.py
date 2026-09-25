@@ -119,6 +119,11 @@ GITHUB_OAUTH_SCOPE = env("GITHUB_OAUTH_SCOPE", default="repo")
 TELEGRAM_BOT_USERNAME = env("TELEGRAM_BOT_USERNAME", default="")
 TELEGRAM_BOT_SERVICE_URL = env("TELEGRAM_BOT_SERVICE_URL", default="http://localhost:9000")
 BOT_SERVICE_API_KEY = env("BOT_SERVICE_API_KEY", default="")
+# Push in-app notifications to the user's linked Telegram chat. Off unless switched on, so tests and a
+# bot-less dev setup never make network calls; production sets it to true. Delivery runs in a
+# background thread by default so a slow bot service can never slow down the request that caused it.
+TELEGRAM_NOTIFICATIONS_ENABLED = env.bool("TELEGRAM_NOTIFICATIONS_ENABLED", default=False)
+TELEGRAM_NOTIFICATIONS_ASYNC = env.bool("TELEGRAM_NOTIFICATIONS_ASYNC", default=True)
 # Shared with devtrack-telegram-bot: this signs /start deep-link tokens,
 # that service verifies them — same value must be set on both sides.
 TELEGRAM_LINK_SECRET = env("TELEGRAM_LINK_SECRET", default="")

@@ -45,6 +45,17 @@ def send_message(user_id, text):
     return response.json()
 
 
+def notify(payload):
+    """Ask the bot to tell a user about an event. Returns whether a message went out: False when the
+    user has no linked chat (404) or muted the bot (202) — neither is an error."""
+    response = _call("POST", "/notify", json=payload)
+    if response.status_code in (202, 404):
+        return False
+    if response.status_code != 200:
+        raise BotServiceError(_detail(response, "Failed to send Telegram notification."))
+    return True
+
+
 def get_status(user_id):
     response = _call("GET", f"/status/{user_id}")
     if response.status_code != 200:
