@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import logging
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -7,6 +8,7 @@ from django.contrib.auth import get_user_model
 from django.core import signing
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404, redirect
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -22,6 +24,7 @@ from apps.workspaces.permissions import get_membership
 from . import services
 from .models import GitHubAccount, GitHubCommit, GitHubPullRequest, GitHubRepositoryLink
 from .parsing import extract_issue_ids
+from .workflow import advance_issue, branch_from_ref, parse_github_datetime
 from .serializers import (
     GitHubCommitSerializer,
     GitHubImportSerializer,
@@ -31,6 +34,7 @@ from .serializers import (
 )
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def _require_workspace_member(user, workspace):
@@ -286,8 +290,8 @@ def _upsert(model, retry_once=True, **kwargs):
         return _upsert(model, retry_once=False, **kwargs)
 
 
-def _resolve_actor(pr_data, repo_link):
-    login = (pr_data.get("user") or {}).get("login")
+def _resolve_actor(login, repo_link):
+    """The DevTrack user behind a GitHub login, else whoever connected the repository."""
     if login:
         account = GitHubAccount.objects.filter(github_username__iexact=login).select_related("user").first()
         if account:
@@ -296,6 +300,7 @@ def _resolve_actor(pr_data, repo_link):
 
 
 def _handle_push(repo_link, payload):
+    branch = branch_from_ref(payload.get("ref", ""))
     for commit in payload.get("commits", []):
         ids = extract_issue_ids(commit.get("message", ""))
         matched = _match_issues(repo_link.project, ids)
@@ -309,9 +314,15 @@ def _handle_push(repo_link, payload):
                 "author_username": author.get("username", "") or "",
                 "author_name": author.get("name", ""),
                 "url": commit.get("url", ""),
+                "branch": branch,
+                "committed_at": parse_github_datetime(commit.get("timestamp")),
             },
         )
         commit_obj.issues.set(matched)
+        # Work has started the moment a commit mentions the issue.
+        actor = _resolve_actor(author.get("username"), repo_link)
+        for issue in matched:
+            advance_issue(issue, Issue.Status.IN_PROGRESS, actor)
 
 
 def _handle_pull_request(repo_link, payload):
@@ -332,14 +343,32 @@ def _handle_pull_request(repo_link, payload):
             "url": pr_data.get("html_url", ""),
             "head_ref": (pr_data.get("head") or {}).get("ref", ""),
             "base_ref": (pr_data.get("base") or {}).get("ref", ""),
+            "draft": bool(pr_data.get("draft", False)),
+            "opened_at": parse_github_datetime(pr_data.get("created_at")),
+            "merged_at": parse_github_datetime(pr_data.get("merged_at")),
+            "closed_at": parse_github_datetime(pr_data.get("closed_at")),
         },
     )
     pr.issues.set(matched)
+    actor = _resolve_actor((pr_data.get("user") or {}).get("login"), repo_link)
 
     # GitHub only ever sets merged: true together with action: "closed" — there
     # is no separate "merged" action, so this is the correct/only merge trigger.
-    if payload.get("action") == "closed" and pr_data.get("merged"):
-        actor = _resolve_actor(pr_data, repo_link)
+    is_merge = payload.get("action") == "closed" and pr_data.get("merged")
+    base_ref = (pr_data.get("base") or {}).get("ref", "")
+    merged_into_default = not repo_link.default_branch or base_ref == repo_link.default_branch
+
+    if is_merge and not merged_into_default:
+        # Landed on a feature/release branch, not on the main line: the work is reviewed, not shipped.
+        for issue in matched:
+            advance_issue(issue, Issue.Status.IN_REVIEW, actor)
+    elif not is_merge and pr_data.get("state", GitHubPullRequest.State.OPEN) == GitHubPullRequest.State.OPEN:
+        # An open pull request means work is under way (a draft) or waiting for review (ready).
+        target = Issue.Status.IN_PROGRESS if pr_data.get("draft") else Issue.Status.IN_REVIEW
+        for issue in matched:
+            advance_issue(issue, target, actor)
+
+    if is_merge and merged_into_default:
         for issue in matched:
             if issue.status == Issue.Status.DONE:
                 continue
@@ -360,6 +389,40 @@ def _handle_pull_request(repo_link, payload):
                     "pr_url": pr_data.get("html_url", ""),
                 },
             )
+
+
+def _apply_github_issue_state(repo_link, item, actor):
+    """Mirror a GitHub issue being closed/reopened onto the imported DevTrack issue with that number."""
+    if not item or "pull_request" in item:
+        return
+    issue = Issue.objects.filter(project=repo_link.project, github_number=item.get("number")).first()
+    if issue is None:
+        return
+    if item.get("state") == "closed":
+        advance_issue(issue, Issue.Status.DONE, actor)
+    elif item.get("state") == "open" and issue.status == Issue.Status.DONE:
+        issue._actor = actor
+        issue.status = Issue.Status.TODO
+        issue.save(update_fields=["status", "updated_at"])
+
+
+def _handle_issues_event(repo_link, payload):
+    if payload.get("action") not in ("closed", "reopened"):
+        return
+    item = payload.get("issue") or {}
+    actor = _resolve_actor((payload.get("sender") or {}).get("login"), repo_link)
+    _apply_github_issue_state(repo_link, item, actor)
+
+
+def _touch_link(repo_link, payload):
+    """Record that GitHub is talking to us, and keep the default branch current."""
+    fields = ["last_event_at", "updated_at"]
+    repo_link.last_event_at = timezone.now()
+    default_branch = (payload.get("repository") or {}).get("default_branch")
+    if default_branch and default_branch != repo_link.default_branch:
+        repo_link.default_branch = default_branch
+        fields.append("default_branch")
+    repo_link.save(update_fields=fields)
 
 
 class GitHubWebhookView(APIView):
@@ -392,12 +455,15 @@ class GitHubWebhookView(APIView):
             # an error condition for GitHub's delivery system.
             return Response({"detail": "Repository not linked to any project."}, status=status.HTTP_200_OK)
 
+        _touch_link(repo_link, payload)
         if event == "ping":
             return Response({"detail": "pong"}, status=status.HTTP_200_OK)
         if event == "push":
             _safely(_handle_push, repo_link, payload)
         elif event == "pull_request":
             _safely(_handle_pull_request, repo_link, payload)
+        elif event == "issues":
+            _safely(_handle_issues_event, repo_link, payload)
         else:
             return Response({"detail": f"Unhandled event: {event}"}, status=status.HTTP_200_OK)
         return Response({"detail": "ok"}, status=status.HTTP_200_OK)
@@ -410,7 +476,8 @@ def _safely(handler, repo_link, payload):
         # Unexpected/malformed payload shape for an event we do parse — skip
         # rather than 500. GitHub disables a hook after repeated non-2xx
         # responses, and a shape we don't recognize isn't the sender's fault.
-        pass
+        # Log it though: a silent skip is how a broken integration goes unnoticed.
+        logger.warning("Skipped a malformed GitHub payload for %s", repo_link.full_name, exc_info=True)
 
 
 def _repo_token(link, requester):
@@ -439,6 +506,7 @@ def _commit_payload(item):
         "message": commit.get("message", ""),
         "author": {"username": (item.get("author") or {}).get("login", ""), "name": author.get("name", "")},
         "url": item.get("html_url", ""),
+        "timestamp": author.get("date", ""),
     }
 
 
@@ -464,15 +532,21 @@ class ProjectGitHubSyncView(APIView):
         try:
             pulls = services.list_repo_pulls(token, link.full_name)
             commits = services.list_repo_commits(token, link.full_name)
+            github_issues = services.list_recent_issues(token, link.full_name)
         except services.GitHubAPIError as exc:
             raise ValidationError({"detail": str(exc)})
 
         # Oldest first so a merge is applied after the PR was first seen.
         for pr in reversed(pulls):
             _safely(_handle_pull_request, link, _pull_request_payload(pr))
+        push = {"ref": f"refs/heads/{link.default_branch}"} if link.default_branch else {}
         for item in reversed(commits):
-            _safely(_handle_push, link, {"commits": [_commit_payload(item)]})
-        return Response({"pull_requests": len(pulls), "commits": len(commits)})
+            _safely(_handle_push, link, {**push, "commits": [_commit_payload(item)]})
+        for item in github_issues:
+            _apply_github_issue_state(link, item, link.connected_by)
+        link.last_synced_at = timezone.now()
+        link.save(update_fields=["last_synced_at", "updated_at"])
+        return Response({"pull_requests": len(pulls), "commits": len(commits), "issues": len(github_issues)})
 
 
 ISSUE_TYPE_BY_LABEL = {

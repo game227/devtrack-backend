@@ -499,9 +499,10 @@ class ManualSyncTests(GitHubFlowBase):
         )
         self.url = reverse("project-github-sync", kwargs={"project_id": self.project.id})
 
-    def sync(self, pulls, commits):
+    def sync(self, pulls, commits, issues=()):
         with patch("apps.integrations.views.services.list_repo_pulls", return_value=pulls), \
-             patch("apps.integrations.views.services.list_repo_commits", return_value=commits):
+             patch("apps.integrations.views.services.list_repo_commits", return_value=commits), \
+             patch("apps.integrations.views.services.list_recent_issues", return_value=list(issues)):
             return self.client.post(self.url)
 
     def test_pulls_commits_and_merges_are_processed_like_webhooks(self):
@@ -515,7 +516,7 @@ class ManualSyncTests(GitHubFlowBase):
         response = self.sync(pulls, commits)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data, {"pull_requests": 1, "commits": 1})
+        self.assertEqual(response.data, {"pull_requests": 1, "commits": 1, "issues": 0})
         self.issue.refresh_from_db()
         self.assertEqual(self.issue.status, Issue.Status.DONE)  # merged PR closes it
         pr = GitHubPullRequest.objects.get(number=30)
@@ -569,3 +570,180 @@ class RepoListFlagsTests(TestCase):
             get.return_value.status_code = 200
             get.return_value.json.return_value = [{"number": 1, "title": "issue"}, {"number": 2, "title": "pr", "pull_request": {}}]
             self.assertEqual([i["number"] for i in list_repo_issues("tok", "me/repo")], [1])
+
+
+@override_settings(GITHUB_WEBHOOK_SECRET=WEBHOOK_SECRET)
+class GitHubWorkflowTests(TestCase):
+    """How GitHub activity moves issues: forward only, attributed to the developer."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(username="wfowner", email="wfowner@example.com", password="pw")
+        self.dev = User.objects.create_user(username="wfdev", email="wfdev@example.com", password="pw")
+        self.workspace = Workspace.objects.create(name="WF", owner=self.owner)
+        Membership.objects.create(workspace=self.workspace, user=self.owner, role="owner")
+        Membership.objects.create(workspace=self.workspace, user=self.dev, role="member")
+        GitHubAccount.objects.create(user=self.dev, github_user_id=902, github_username="dev-gh", access_token="t")
+        self.project = Project.objects.create(workspace=self.workspace, name="P", owner=self.owner)
+        self.issue = Issue.objects.create(
+            project=self.project, title="Work", reporter=self.owner, status=Issue.Status.TODO, github_number=5
+        )
+        self.link = GitHubRepositoryLink.objects.create(
+            project=self.project, github_repo_id=777, full_name="acme/wf", webhook_id=1, connected_by=self.owner
+        )
+        self.client = APIClient()
+
+    def post_event(self, event, payload):
+        payload.setdefault("repository", {"id": 777})
+        body = json.dumps(payload).encode()
+        return self.client.post(
+            reverse("github-webhook"),
+            data=body,
+            content_type="application/json",
+            HTTP_X_GITHUB_EVENT=event,
+            HTTP_X_HUB_SIGNATURE_256=sign(body),
+        )
+
+    def pr(self, action="opened", **overrides):
+        pull_request = {
+            "id": 900, "number": 12, "title": "Do the work #5", "body": "", "state": "open", "merged": False,
+            "html_url": "https://x/pull/12", "user": {"login": "dev-gh"}, "head": {"ref": "feat"}, "base": {"ref": "main"},
+            "draft": False, "created_at": "2026-09-20T08:00:00Z", "merged_at": None, "closed_at": None,
+        }
+        pull_request.update(overrides)
+        return {"action": action, "pull_request": pull_request}
+
+    def status(self):
+        self.issue.refresh_from_db()
+        return self.issue.status
+
+    # --- commits -------------------------------------------------------------------------------
+
+    def push(self, message="Start on #5", ref="refs/heads/feat"):
+        return self.post_event(
+            "push",
+            {"ref": ref, "commits": [{"id": "a" * 40, "message": message, "url": "https://x/c/a",
+                                       "timestamp": "2026-09-21T10:30:00+00:00", "author": {"username": "dev-gh", "name": "Dev"}}]},
+        )
+
+    def test_a_commit_mentioning_an_issue_starts_it_and_credits_the_developer(self):
+        self.push()
+        self.assertEqual(self.status(), Issue.Status.IN_PROGRESS)
+        moved = Activity.objects.get(verb="moved_issue")
+        self.assertEqual(moved.actor, self.dev)
+        self.assertEqual(moved.metadata, {"from": "todo", "to": "in_progress"})
+
+    def test_a_commit_stores_its_real_time_and_branch(self):
+        self.push()
+        commit = GitHubCommit.objects.get()
+        self.assertEqual(commit.branch, "feat")
+        self.assertEqual(commit.committed_at.isoformat(), "2026-09-21T10:30:00+00:00")
+
+    def test_a_commit_never_drags_an_issue_backwards(self):
+        for later in (Issue.Status.IN_REVIEW, Issue.Status.DONE):
+            self.issue.status = later
+            self.issue.save()
+            moves_before = Activity.objects.filter(verb="moved_issue").count()
+            self.push()
+            self.assertEqual(self.status(), later)
+            self.assertEqual(Activity.objects.filter(verb="moved_issue").count(), moves_before)
+
+    # --- pull requests -------------------------------------------------------------------------
+
+    def test_a_ready_pull_request_puts_the_issue_in_review(self):
+        self.post_event("pull_request", self.pr())
+        self.assertEqual(self.status(), Issue.Status.IN_REVIEW)
+
+    def test_a_draft_pull_request_only_marks_it_in_progress(self):
+        self.post_event("pull_request", self.pr(draft=True))
+        self.assertEqual(self.status(), Issue.Status.IN_PROGRESS)
+        self.assertTrue(GitHubPullRequest.objects.get().draft)
+
+    def test_a_pull_request_stores_githubs_timestamps(self):
+        self.post_event("pull_request", self.pr(action="closed", state="closed", merged=True,
+                                                  merged_at="2026-09-22T09:00:00Z", closed_at="2026-09-22T09:00:00Z"))
+        pr = GitHubPullRequest.objects.get()
+        self.assertEqual(pr.opened_at.isoformat(), "2026-09-20T08:00:00+00:00")
+        self.assertEqual(pr.merged_at.isoformat(), "2026-09-22T09:00:00+00:00")
+
+    def test_a_closed_unmerged_pull_request_changes_nothing(self):
+        self.post_event("pull_request", self.pr(action="closed", state="closed"))
+        self.assertEqual(self.status(), Issue.Status.TODO)
+
+    def test_merging_into_the_default_branch_finishes_the_issue(self):
+        self.link.default_branch = "main"
+        self.link.save()
+        self.post_event("pull_request", self.pr(action="closed", state="closed", merged=True))
+        self.assertEqual(self.status(), Issue.Status.DONE)
+
+    def test_merging_into_another_branch_only_moves_it_to_review(self):
+        self.post_event(
+            "pull_request",
+            {**self.pr(action="closed", state="closed", merged=True, base={"ref": "release/1.2"}),
+             "repository": {"id": 777, "default_branch": "main"}},
+        )
+        self.assertEqual(self.status(), Issue.Status.IN_REVIEW)
+        self.assertFalse(Activity.objects.filter(verb="pr_merged").exists())
+
+    # --- issues event --------------------------------------------------------------------------
+
+    def issues_event(self, action, state, number=5, **extra):
+        return self.post_event("issues", {"action": action, "issue": {"number": number, "state": state, **extra},
+                                          "sender": {"login": "dev-gh"}})
+
+    def test_closing_the_github_issue_finishes_the_devtrack_issue(self):
+        self.issues_event("closed", "closed")
+        self.assertEqual(self.status(), Issue.Status.DONE)
+        self.assertEqual(Activity.objects.get(verb="moved_issue").actor, self.dev)
+
+    def test_reopening_puts_a_finished_issue_back_to_todo(self):
+        self.issue.status = Issue.Status.DONE
+        self.issue.save()
+        self.issues_event("reopened", "open")
+        self.assertEqual(self.status(), Issue.Status.TODO)
+
+    def test_reopening_leaves_an_issue_that_is_still_open_alone(self):
+        self.issue.status = Issue.Status.IN_PROGRESS
+        self.issue.save()
+        self.issues_event("reopened", "open")
+        self.assertEqual(self.status(), Issue.Status.IN_PROGRESS)
+
+    def test_issues_event_ignores_unknown_numbers_pull_requests_and_other_actions(self):
+        self.issues_event("closed", "closed", number=999)
+        self.issues_event("closed", "closed", pull_request={"url": "x"})
+        self.issues_event("labeled", "open")
+        self.assertEqual(self.status(), Issue.Status.TODO)
+
+    # --- link health ---------------------------------------------------------------------------
+
+    def test_every_delivery_records_when_github_last_spoke_and_the_default_branch(self):
+        self.assertIsNone(self.link.last_event_at)
+        self.post_event("ping", {"repository": {"id": 777, "default_branch": "trunk"}})
+        self.link.refresh_from_db()
+        self.assertIsNotNone(self.link.last_event_at)
+        self.assertEqual(self.link.default_branch, "trunk")
+
+    def test_the_link_endpoint_exposes_the_webhook_health(self):
+        self.post_event("ping", {"repository": {"id": 777, "default_branch": "main"}})
+        self.client.force_authenticate(self.owner)
+        data = self.client.get(reverse("project-github-link", kwargs={"project_id": self.project.id})).data
+        self.assertEqual(data["default_branch"], "main")
+        self.assertIsNotNone(data["last_event_at"])
+        self.assertIsNone(data["last_synced_at"])
+
+
+class SyncWorkflowTests(ManualSyncTests):
+    """The manual sync also mirrors closed/reopened GitHub issues and stamps the link."""
+
+    def test_sync_closes_a_devtrack_issue_whose_github_issue_was_closed(self):
+        response = self.sync([], [], issues=[{"number": 7, "state": "closed"}])
+        self.assertEqual(response.data["issues"], 1)
+        self.issue.refresh_from_db()
+        self.assertEqual(self.issue.status, Issue.Status.DONE)
+
+    def test_sync_stamps_the_link_and_stores_commit_times(self):
+        commits = [{"sha": "b" * 40, "commit": {"message": "Work on #7", "author": {"name": "Dev", "date": "2026-09-21T10:30:00Z"}},
+                    "author": {"login": "dev"}, "html_url": "https://x/c/b"}]
+        self.sync([], commits)
+        link = GitHubRepositoryLink.objects.get(github_repo_id=321)
+        self.assertIsNotNone(link.last_synced_at)
+        self.assertEqual(GitHubCommit.objects.get().committed_at.isoformat(), "2026-09-21T10:30:00+00:00")

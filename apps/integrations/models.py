@@ -33,6 +33,13 @@ class GitHubRepositoryLink(models.Model):
     github_repo_id = models.BigIntegerField(unique=True)
     full_name = models.CharField(max_length=255)
     webhook_id = models.BigIntegerField(null=True, blank=True)
+    # Kept in step with every delivery (GitHub includes it in each payload): a PR merged into
+    # this branch closes its issues, a merge into any other branch only moves them to review.
+    default_branch = models.CharField(max_length=255, blank=True)
+    # When GitHub last delivered anything / when a manual sync last ran: tells the UI whether the
+    # webhook is really alive rather than merely installed.
+    last_event_at = models.DateTimeField(null=True, blank=True)
+    last_synced_at = models.DateTimeField(null=True, blank=True)
     connected_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="linked_github_repos"
     )
@@ -60,6 +67,11 @@ class GitHubPullRequest(models.Model):
     url = models.URLField()
     head_ref = models.CharField(max_length=255, blank=True)
     base_ref = models.CharField(max_length=255, blank=True)
+    draft = models.BooleanField(default=False)
+    # GitHub's own timestamps (created_at/updated_at below are when *DevTrack* stored the row).
+    opened_at = models.DateTimeField(null=True, blank=True)
+    merged_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
     issues = models.ManyToManyField("issues.Issue", related_name="linked_pull_requests", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -79,6 +91,9 @@ class GitHubCommit(models.Model):
     author_username = models.CharField(max_length=255, blank=True)
     author_name = models.CharField(max_length=255, blank=True)
     url = models.URLField()
+    branch = models.CharField(max_length=255, blank=True)
+    # When the commit was authored on GitHub; created_at is only when DevTrack heard about it.
+    committed_at = models.DateTimeField(null=True, blank=True)
     issues = models.ManyToManyField("issues.Issue", related_name="linked_commits", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

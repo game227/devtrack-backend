@@ -13,7 +13,18 @@ class GitHubRepositoryLinkSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = GitHubRepositoryLink
-        fields = ["id", "project", "github_repo_id", "full_name", "webhook_installed", "connected_by", "created_at"]
+        fields = [
+            "id",
+            "project",
+            "github_repo_id",
+            "full_name",
+            "webhook_installed",
+            "default_branch",
+            "last_event_at",
+            "last_synced_at",
+            "connected_by",
+            "created_at",
+        ]
         read_only_fields = fields
 
     def get_webhook_installed(self, obj):
@@ -45,6 +56,10 @@ class GitHubPullRequestSerializer(serializers.ModelSerializer):
             "url",
             "head_ref",
             "base_ref",
+            "draft",
+            "opened_at",
+            "merged_at",
+            "closed_at",
             "created_at",
             "updated_at",
         ]
@@ -53,4 +68,4 @@ class GitHubPullRequestSerializer(serializers.ModelSerializer):
 class GitHubCommitSerializer(serializers.ModelSerializer):
     class Meta:
         model = GitHubCommit
-        fields = ["id", "sha", "message", "author_username", "author_name", "url", "created_at"]
+        fields = ["id", "sha", "message", "author_username", "author_name", "url", "branch", "committed_at", "created_at"]

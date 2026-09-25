@@ -97,7 +97,7 @@ def create_webhook(access_token, full_name, callback_url, secret):
         json={
             "name": "web",
             "active": True,
-            "events": ["push", "pull_request"],
+            "events": ["push", "pull_request", "issues"],
             "config": {"url": callback_url, "content_type": "json", "secret": secret},
         },
         timeout=REQUEST_TIMEOUT,
@@ -187,3 +187,16 @@ def list_repo_commits(access_token, full_name, limit=30):
     if response.status_code != 200:
         raise GitHubAPIError(f"Could not read the repository's commits: {_github_message(response)}")
     return response.json()
+
+
+def list_recent_issues(access_token, full_name, limit=30):
+    """The most recently updated issues (pull requests excluded): enough to notice closes/reopens."""
+    response = requests.get(
+        f"{GITHUB_API_BASE}/repos/{full_name}/issues",
+        headers=_headers(access_token),
+        params={"state": "all", "per_page": limit, "sort": "updated", "direction": "desc"},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if response.status_code != 200:
+        raise GitHubAPIError(f"Could not read the repository's issues: {_github_message(response)}")
+    return [item for item in response.json() if "pull_request" not in item]
