@@ -39,9 +39,12 @@ def _workspace_ids(user):
     return Membership.objects.filter(user=user).values_list("workspace_id", flat=True)
 
 
-def _issue_brief(issue, today=None):
+def _issue_brief(issue, today=None, viewer=None):
     today = today or timezone.localdate()
     return {
+        # Whether `viewer` may change this issue (only its creator can) — lets the bot offer a
+        # "Done" button only where it would work.
+        "can_edit": viewer is not None and issue.reporter_id == viewer.id,
         "id": issue.id,
         "title": issue.title,
         "status": issue.status,
@@ -106,7 +109,7 @@ class BotIssuesView(BotView):
         elif scope == "soon":
             issues = issues.filter(due_date__lte=today + dt.timedelta(days=DUE_SOON_DAYS))
         ordered = sorted(issues, key=lambda issue: urgency_key(issue, today))
-        return Response({"total": len(ordered), "issues": [_issue_brief(i, today) for i in ordered[:LIST_LIMIT]]})
+        return Response({"total": len(ordered), "issues": [_issue_brief(i, today, request.user) for i in ordered[:LIST_LIMIT]]})
 
     def post(self, request):
         """Create an issue (reporter = the user) in a project they can see."""
@@ -125,7 +128,7 @@ class BotIssuesView(BotView):
         issue = Issue(project=project, title=title, reporter=request.user)
         issue._actor = request.user
         issue.save()
-        return Response(_issue_brief(issue), status=http.HTTP_201_CREATED)
+        return Response(_issue_brief(issue, viewer=request.user), status=http.HTTP_201_CREATED)
 
 
 class BotProjectsView(BotView):
@@ -164,7 +167,7 @@ class BotProjectHealthView(BotView):
 class BotIssueDetailView(BotView):
     def get(self, request, pk):
         issue = _visible_issue(request.user, pk)
-        return Response({**_issue_brief(issue), "description": issue.description[:400]})
+        return Response({**_issue_brief(issue, viewer=request.user), "description": issue.description[:400]})
 
 
 class BotIssueStatusView(BotView):
@@ -179,7 +182,7 @@ class BotIssueStatusView(BotView):
         issue._actor = request.user
         issue.status = new_status
         issue.save(update_fields=["status", "updated_at"])
-        return Response(_issue_brief(issue))
+        return Response(_issue_brief(issue, viewer=request.user))
 
 
 class BotIssueCommentView(BotView):
@@ -189,4 +192,4 @@ class BotIssueCommentView(BotView):
         if not body:
             raise ValidationError({"body": "This field is required."})
         Comment.objects.create(author=request.user, body=body[:2000], content_object=issue)
-        return Response(_issue_brief(issue), status=http.HTTP_201_CREATED)
+        return Response(_issue_brief(issue, viewer=request.user), status=http.HTTP_201_CREATED)

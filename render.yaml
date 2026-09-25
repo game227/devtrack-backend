@@ -98,6 +98,14 @@ services:
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
         generateValue: true
+      # The bot reads/changes tasks through the backend, links buttons to the web app, and registers
+      # its own webhook with Telegram on start-up.
+      - key: BACKEND_URL
+        value: https://devtrack-backend.onrender.com
+      - key: FRONTEND_URL
+        value: https://devtrack-frontend.onrender.com
+      - key: PUBLIC_URL
+        value: https://devtrack-telegram-bot.onrender.com
       - fromGroup: devtrack-shared-secrets
 
   - type: web

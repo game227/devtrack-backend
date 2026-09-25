@@ -104,6 +104,12 @@ class BotIssuesTests(BotApiBase):
         self.assertTrue(data["issues"][0]["overdue"])
         self.assertEqual(data["issues"][0]["path"], f"/issues/{late.id}")
 
+    def test_each_issue_says_whether_the_user_may_edit_it(self):
+        mine = self.issue("Mine", assignee=self.me)
+        theirs = self.issue("Theirs", assignee=self.me, reporter=self.other)
+        flags = {i["id"]: i["can_edit"] for i in self.client.get(self.url).data["issues"]}
+        self.assertEqual(flags, {mine.id: True, theirs.id: False})
+
     def test_scopes_narrow_the_list(self):
         late = self.issue("Late", assignee=self.me, due_date=self.today - dt.timedelta(days=1))
         soon = self.issue("Soon", assignee=self.me, due_date=self.today + dt.timedelta(days=2))
