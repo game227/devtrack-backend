@@ -6,6 +6,8 @@ from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from .tokens import email_verification_token
+
 User = get_user_model()
 
 
@@ -16,6 +18,7 @@ class UserSerializer(serializers.ModelSerializer):
             "id",
             "username",
             "email",
+            "email_verified",
             "first_name",
             "last_name",
             "avatar",
@@ -23,7 +26,7 @@ class UserSerializer(serializers.ModelSerializer):
             "title",
             "date_joined",
         ]
-        read_only_fields = ["id", "username", "email", "date_joined"]
+        read_only_fields = ["id", "username", "email", "email_verified", "date_joined"]
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -93,6 +96,29 @@ class AccountDeleteSerializer(serializers.Serializer):
         if not self.context["request"].user.check_password(value):
             raise serializers.ValidationError("Password is incorrect.")
         return value
+
+
+class EmailVerificationConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField()
+    token = serializers.CharField()
+
+    def validate(self, attrs):
+        try:
+            uid = force_str(urlsafe_base64_decode(attrs["uid"]))
+            user = User.objects.get(pk=uid)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            raise serializers.ValidationError({"uid": "Invalid user."})
+
+        if not email_verification_token.check_token(user, attrs["token"]):
+            raise serializers.ValidationError({"token": "Invalid or expired token."})
+        attrs["user"] = user
+        return attrs
+
+    def save(self):
+        user = self.validated_data["user"]
+        user.email_verified = True
+        user.save(update_fields=["email_verified"])
+        return user
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):

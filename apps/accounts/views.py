@@ -25,10 +25,12 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 # the stateless services module is imported, never telegram_bot's models.
 from apps.telegram_bot import services as telegram_services
 
-from .messages import password_reset_message
-from .throttling import AccountLoginRateThrottle
+from .messages import email_verification_message, password_reset_message
+from .throttling import AccountLoginRateThrottle, EmailVerifyResendThrottle
+from .tokens import email_verification_token
 from .serializers import (
     AccountDeleteSerializer,
+    EmailVerificationConfirmSerializer,
     LoginSerializer,
     PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
@@ -64,6 +66,35 @@ def _deliver_password_reset(user_id, email, message):
         logger.exception("Password reset email could not be delivered")
 
 
+def _deliver_email_verification(email, message):
+    try:
+        send_mail(
+            subject=message["subject"],
+            message=message["email"],
+            from_email=None,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception:  # noqa: BLE001 — never let delivery problems reach the caller
+        logger.exception("Verification email could not be delivered")
+
+
+def _send_verification_email(user, lang):
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = email_verification_token.make_token(user)
+    verify_link = f"{settings.FRONTEND_URL}/verify-email/{uid}/{token}/"
+    message = email_verification_message(lang, verify_link)
+    if settings.PASSWORD_RESET_ASYNC:
+        threading.Thread(target=_deliver_email_verification, args=(user.email, message), daemon=True).start()
+    else:
+        _deliver_email_verification(user.email, message)
+
+
+def _lang_from_request(request):
+    lang = request.data.get("lang")
+    return lang if lang in ("en", "uz") else "en"
+
+
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
@@ -73,6 +104,7 @@ class RegisterView(generics.CreateAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        _send_verification_email(user, _lang_from_request(request))
         refresh = RefreshToken.for_user(user)
         return Response(
             {
@@ -82,6 +114,28 @@ class RegisterView(generics.CreateAPIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class EmailVerifyConfirmView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = EmailVerificationConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response({"detail": "Email verified."})
+
+
+class EmailVerifyResendView(APIView):
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [EmailVerifyResendThrottle]
+
+    def post(self, request):
+        user = request.user
+        if user.email_verified:
+            return Response({"detail": "Email is already verified."}, status=status.HTTP_400_BAD_REQUEST)
+        _send_verification_email(user, _lang_from_request(request))
+        return Response({"detail": "Verification email sent."})
 
 
 class LoginView(TokenObtainPairView):

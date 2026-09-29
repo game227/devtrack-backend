@@ -23,3 +23,23 @@ def password_reset_message(language, link):
         "email": texts["email"].format(link=link),
         "telegram": texts["telegram"].format(link=link),
     }
+
+
+EMAIL_VERIFICATION = {
+    "en": {
+        "subject": "Verify your DevTrack email",
+        "email": "Confirm this is your email address: {link}",
+    },
+    "uz": {
+        "subject": "DevTrack email manzilini tasdiqlang",
+        "email": "Bu email manzilingiz ekanligini tasdiqlang: {link}",
+    },
+}
+
+
+def email_verification_message(language, link):
+    texts = EMAIL_VERIFICATION.get(language) or EMAIL_VERIFICATION[DEFAULT_LANGUAGE]
+    return {
+        "subject": texts["subject"],
+        "email": texts["email"].format(link=link),
+    }

@@ -166,6 +166,7 @@ REST_FRAMEWORK = {
         # don't set their own throttle_classes.
         "user": "600/min",
         "login_account": "10/min",
+        "email_verify_resend": "3/min",
     },
 }
 

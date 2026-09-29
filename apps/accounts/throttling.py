@@ -1,4 +1,4 @@
-from rest_framework.throttling import SimpleRateThrottle
+from rest_framework.throttling import SimpleRateThrottle, UserRateThrottle
 
 
 class AccountLoginRateThrottle(SimpleRateThrottle):
@@ -15,3 +15,7 @@ class AccountLoginRateThrottle(SimpleRateThrottle):
         if not identifier:
             return None
         return self.cache_format % {"scope": self.scope, "ident": identifier}
+
+
+class EmailVerifyResendThrottle(UserRateThrottle):
+    scope = "email_verify_resend"

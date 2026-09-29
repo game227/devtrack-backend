@@ -9,3 +9,4 @@ class User(AbstractUser):
     # Profile-facing job title (e.g. "Senior Backend Developer") — distinct
     # from Membership.role, which is the workspace permission level.
     title = models.CharField(max_length=150, blank=True)
+    email_verified = models.BooleanField(default=False)
