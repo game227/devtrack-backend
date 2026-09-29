@@ -2,11 +2,16 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core import mail
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.telegram_bot.services import BotServiceError
+
+from .throttling import AccountLoginRateThrottle
 
 User = get_user_model()
 
@@ -77,3 +82,82 @@ class PasswordResetLanguageTests(TestCase):
         mock_thread.assert_called_once()
         mock_thread.return_value.start.assert_called_once()
         self.assertEqual(len(mail.outbox), 0)  # nothing was delivered inline
+
+
+class AccountLoginThrottleTests(TestCase):
+    # DRF's SimpleRateThrottle reads DEFAULT_THROTTLE_RATES into a class
+    # attribute once, at import time — override_settings doesn't reach
+    # already-imported throttle classes, so the rate is patched directly.
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        original_rates = AccountLoginRateThrottle.THROTTLE_RATES
+        AccountLoginRateThrottle.THROTTLE_RATES = {**original_rates, "login_account": "3/min"}
+        self.addCleanup(setattr, AccountLoginRateThrottle, "THROTTLE_RATES", original_rates)
+        self.user = User.objects.create_user(
+            username="throttle_user", email="throttle_user@example.com", password="right-pass"
+        )
+        self.client = APIClient()
+        self.url = reverse("login")
+
+    def test_repeated_attempts_on_one_account_get_throttled_regardless_of_ip(self):
+        for _ in range(3):
+            self.client.post(self.url, {"username": "throttle_user", "password": "wrong"}, format="json")
+        response = self.client.post(
+            self.url, {"username": "throttle_user", "password": "wrong"}, format="json"
+        )
+        self.assertEqual(response.status_code, 429)
+
+    def test_a_different_account_is_not_affected_by_another_accounts_throttling(self):
+        for _ in range(3):
+            self.client.post(self.url, {"username": "throttle_user", "password": "wrong"}, format="json")
+        other = User.objects.create_user(username="other_user", email="other@example.com", password="pw")
+        response = self.client.post(self.url, {"username": "other_user", "password": "pw"}, format="json")
+        self.assertEqual(response.status_code, 200)
+
+
+class AccountDeleteTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.user = User.objects.create_user(
+            username="delete_me", email="delete_me@example.com", password="right-pass",
+            first_name="Jane", bio="hi",
+        )
+        self.client = APIClient()
+        refresh = RefreshToken.for_user(self.user)
+        self.refresh = refresh
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {refresh.access_token}")
+        self.url = reverse("account_delete")
+
+    def test_wrong_password_is_rejected_and_account_stays_active(self):
+        response = self.client.post(self.url, {"password": "wrong"}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+
+    def test_correct_password_deactivates_and_scrubs_the_account(self):
+        response = self.client.post(self.url, {"password": "right-pass"}, format="json")
+        self.assertEqual(response.status_code, 204)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self.assertEqual(self.user.email, f"deleted-user-{self.user.pk}@devtrack.invalid")
+        self.assertEqual(self.user.first_name, "")
+        self.assertEqual(self.user.bio, "")
+        self.assertFalse(self.user.has_usable_password())
+
+    def test_outstanding_tokens_are_blacklisted(self):
+        OutstandingToken.objects.get_or_create(
+            user=self.user,
+            jti=self.refresh["jti"],
+            defaults={
+                "token": str(self.refresh),
+                "created_at": self.refresh.current_time,
+                "expires_at": self.refresh.current_time,
+            },
+        )
+        self.client.post(self.url, {"password": "right-pass"}, format="json")
+        outstanding = OutstandingToken.objects.filter(user=self.user)
+        self.assertTrue(outstanding.exists())
+        for token in outstanding:
+            self.assertTrue(BlacklistedToken.objects.filter(token=token).exists())

@@ -86,6 +86,15 @@ class PasswordChangeSerializer(serializers.Serializer):
         return user
 
 
+class AccountDeleteSerializer(serializers.Serializer):
+    password = serializers.CharField(write_only=True)
+
+    def validate_password(self, value):
+        if not self.context["request"].user.check_password(value):
+            raise serializers.ValidationError("Password is incorrect.")
+        return value
+
+
 class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
     # Language of the message that carries the reset link (the UI's current language).

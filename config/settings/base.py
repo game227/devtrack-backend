@@ -155,8 +155,17 @@ REST_FRAMEWORK = {
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.OrderingFilter",
     ),
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.UserRateThrottle",
+    ),
     "DEFAULT_THROTTLE_RATES": {
         "anon": "20/min",
+        # Generous safety net for authenticated traffic — not meant to affect
+        # normal usage, just cap a single account gone rogue (script, leaked
+        # token). Falls back to per-IP for anonymous requests on views that
+        # don't set their own throttle_classes.
+        "user": "600/min",
+        "login_account": "10/min",
     },
 }
 

@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -25,7 +26,9 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from apps.telegram_bot import services as telegram_services
 
 from .messages import password_reset_message
+from .throttling import AccountLoginRateThrottle
 from .serializers import (
+    AccountDeleteSerializer,
     LoginSerializer,
     PasswordChangeSerializer,
     PasswordResetConfirmSerializer,
@@ -84,7 +87,7 @@ class RegisterView(generics.CreateAPIView):
 class LoginView(TokenObtainPairView):
     serializer_class = LoginSerializer
     permission_classes = [AllowAny]
-    throttle_classes = [AnonRateThrottle]
+    throttle_classes = [AnonRateThrottle, AccountLoginRateThrottle]
 
 
 class LogoutView(APIView):
@@ -121,6 +124,33 @@ class PasswordChangeView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response({"detail": "Password changed successfully."})
+
+
+class AccountDeleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = AccountDeleteSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        user = request.user
+
+        for token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=token)
+
+        # Deactivate and scrub PII instead of a hard delete: this user may be
+        # the FK target (author, reporter, assignee) across workspaces other
+        # people still rely on — a hard delete would cascade through and
+        # destroy that shared data.
+        user.is_active = False
+        user.email = f"deleted-user-{user.pk}@devtrack.invalid"
+        user.first_name = ""
+        user.last_name = ""
+        user.bio = ""
+        user.title = ""
+        user.avatar = None
+        user.set_unusable_password()
+        user.save()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class PasswordResetRequestView(APIView):
