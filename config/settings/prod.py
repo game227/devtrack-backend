@@ -1,6 +1,22 @@
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration
+
 from .base import *  # noqa: F401,F403
 
 DEBUG = False
+
+# No-op until SENTRY_DSN is set (no Sentry account exists yet) — set the env
+# var later and error tracking turns on with no further code changes.
+SENTRY_DSN = env("SENTRY_DSN", default="")
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[DjangoIntegration(), LoggingIntegration(level=None, event_level="ERROR")],
+        traces_sample_rate=env.float("SENTRY_TRACES_SAMPLE_RATE", default=0.1),
+        send_default_pii=False,
+        environment=env("SENTRY_ENVIRONMENT", default="production"),
+    )
 
 # Render (and most PaaS) terminate TLS at the edge and forward plain HTTP
 # with this header set — without telling Django, request.is_secure() would
