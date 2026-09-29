@@ -81,6 +81,21 @@ services:
       # Error tracking — no-op until a Sentry account exists and this is set.
       - key: SENTRY_DSN
         sync: false
+      # Object storage for media (avatars) — falls back to the mounted disk
+      # until a bucket exists. MEDIA_STORAGE_ENDPOINT_URL is blank for real
+      # AWS S3, or an R2/other S3-compatible endpoint otherwise.
+      - key: MEDIA_STORAGE_BUCKET
+        sync: false
+      - key: MEDIA_STORAGE_ENDPOINT_URL
+        sync: false
+      - key: MEDIA_STORAGE_ACCESS_KEY
+        sync: false
+      - key: MEDIA_STORAGE_SECRET_KEY
+        sync: false
+      - key: MEDIA_STORAGE_REGION
+        sync: false
+      - key: MEDIA_STORAGE_CUSTOM_DOMAIN
+        sync: false
 
   # SQLite lives on a persistent disk, which Render only offers on paid plans.
   - type: web

@@ -35,13 +35,38 @@ SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
 PASSWORD_RESET_ASYNC = env.bool("PASSWORD_RESET_ASYNC", default=True)
 
 # Static files served directly by the app via WhiteNoise — no separate
-# static host needed at this scale. Media (user uploads) stays on local
-# disk (FileSystemStorage, Django's default) backed by a mounted volume.
+# static host needed at this scale.
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"},
 }
+
+# Media (user uploads, e.g. avatars) stays on the mounted disk
+# (FileSystemStorage) until MEDIA_STORAGE_BUCKET is set — an S3-compatible
+# bucket (R2, S3, ...) doesn't exist yet. Switching to one later is just
+# setting env vars, no code change: the disk doesn't scale horizontally
+# and loses files if it ever fills up.
+INSTALLED_APPS = INSTALLED_APPS + ["storages"]
+MEDIA_STORAGE_BUCKET = env("MEDIA_STORAGE_BUCKET", default="")
+if MEDIA_STORAGE_BUCKET:
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.s3boto3.S3Boto3Storage",
+        "OPTIONS": {
+            "bucket_name": MEDIA_STORAGE_BUCKET,
+            # Blank for real AWS S3; set to the provider's endpoint for an
+            # S3-compatible service such as Cloudflare R2.
+            "endpoint_url": env("MEDIA_STORAGE_ENDPOINT_URL", default="") or None,
+            "access_key": env("MEDIA_STORAGE_ACCESS_KEY", default=""),
+            "secret_key": env("MEDIA_STORAGE_SECRET_KEY", default=""),
+            "region_name": env("MEDIA_STORAGE_REGION", default="auto"),
+            # A CDN/custom domain in front of the bucket, if any.
+            "custom_domain": env("MEDIA_STORAGE_CUSTOM_DOMAIN", default="") or None,
+            "default_acl": None,
+            "querystring_auth": False,
+            "file_overwrite": False,
+        },
+    }
 
 MIDDLEWARE = MIDDLEWARE.copy()
 MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")
