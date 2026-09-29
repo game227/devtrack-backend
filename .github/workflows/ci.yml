@@ -34,3 +34,14 @@ jobs:
       - name: Fail if a model change has no migration
         run: python manage.py makemigrations --check --dry-run
       - run: python manage.py test --noinput
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install pip-audit
+      - run: pip-audit -r requirements.txt
