@@ -5,7 +5,28 @@ DevTrack's only durable state is the Postgres database (`devtrack-db` in
 scheduled anywhere — set it up once the database is a real production
 database with real data in it.
 
-## Backing up
+## Scheduled backups (production)
+
+`render.yaml` defines a `devtrack-db-backup` cron job (daily, 02:00 UTC) that runs
+`python manage.py backup_database`: a `pg_dump` in custom format (compressed), uploaded to an
+S3-compatible bucket under `backups/`, with uploads older than `BACKUP_RETENTION_DAYS` (14) deleted.
+Set on that job, in the Render dashboard:
+
+| Variable | Value |
+|---|---|
+| `BACKUP_BUCKET` | Bucket name (a separate bucket from media; versioning/object lock recommended) |
+| `BACKUP_ENDPOINT_URL` | Blank for AWS S3; e.g. `https://<account>.r2.cloudflarestorage.com` for R2 |
+| `BACKUP_ACCESS_KEY`, `BACKUP_SECRET_KEY` | Credentials allowed to put, list and delete in that bucket only |
+| `SECRET_KEY` | Any value (the job does not sign anything) |
+
+The job's own image (`Dockerfile.backup`) ships `pg_dump` 18 from the PostgreSQL project, which also dumps
+older servers; the web image does not carry it. A failed
+dump is an error in the job log, never an empty file. Locally:
+`python manage.py backup_database --local-dir ./backups` (needs `pg_dump` on the PATH).
+
+Restore a `.dump` file with `pg_restore --no-owner --dbname <empty target database> <file>`.
+
+## Manual backups (any machine)
 
 ```bash
 DATABASE_URL=<production connection string> ./scripts/backup.sh

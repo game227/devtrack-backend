@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models, transaction
+from django.utils import timezone
 
 
 class Issue(models.Model):
@@ -54,6 +55,9 @@ class Issue(models.Model):
     # Set on issues imported from GitHub (informational: `number` already equals it).
     github_number = models.PositiveIntegerField(null=True, blank=True)
     github_url = models.URLField(blank=True)
+    # When the issue last reached Done (cleared if it is reopened). Kept by save() whatever path changed
+    # the status (API, board, bot, GitHub automation), so "recently completed" means just that.
+    completed_at = models.DateTimeField(null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -67,6 +71,12 @@ class Issue(models.Model):
         return self.title
 
     def save(self, *args, **kwargs):
+        done = self.status == self.Status.DONE
+        if done != (self.completed_at is not None):
+            self.completed_at = timezone.now() if done else None
+            update_fields = kwargs.get("update_fields")
+            if update_fields is not None and "completed_at" not in update_fields:
+                kwargs["update_fields"] = [*update_fields, "completed_at"]
         if self._state.adding and self.number is None:
             # Allocation and insert are one transaction, with the project row locked, so two issues
             # created at the same moment can never get the same number.

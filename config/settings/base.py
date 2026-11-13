@@ -211,6 +211,8 @@ REST_FRAMEWORK = {
         "register": "10/hour",
         "member_add": "60/hour",
         "github_sync": "10/min",
+        "two_factor": "10/min",
+        "password_check": "10/min",
     },
 }
 

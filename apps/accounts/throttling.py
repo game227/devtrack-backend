@@ -46,6 +46,19 @@ class PasswordResetEmailThrottle(SimpleRateThrottle):
         return self.cache_format % {"scope": self.scope, "ident": email}
 
 
+class AccountTwoFactorThrottle(UserRateThrottle):
+    """Guessing a 6-digit code needs many tries; cap attempts to turn two-factor on or off per user."""
+
+    scope = "two_factor"
+
+
+class PasswordCheckRateThrottle(UserRateThrottle):
+    """Endpoints that answer "is this the account's password?" to a signed-in caller (change password,
+    delete account): with a stolen access token they would otherwise be an unlimited guessing oracle."""
+
+    scope = "password_check"
+
+
 class RegisterRateThrottle(AnonRateThrottle):
     scope = "register"
 

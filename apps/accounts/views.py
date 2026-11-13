@@ -11,7 +11,7 @@ from rest_framework import generics, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -24,6 +24,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 # the stateless services module is imported, never telegram_bot's models.
 from apps.telegram_bot import services as telegram_services
 
+from . import totp
 from .messages import email_verification_message, password_reset_message
 from .serializers import (
     AccountDeleteSerializer,
@@ -33,16 +34,22 @@ from .serializers import (
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     RegisterSerializer,
+    TwoFactorDisableSerializer,
+    TwoFactorEnableSerializer,
+    TwoFactorSetupSerializer,
     UserSerializer,
 )
 from .sessions import revoke_all_sessions
 from .throttling import (
     AccountLoginRateThrottle,
+    AccountTwoFactorThrottle,
     EmailVerifyResendThrottle,
+    PasswordCheckRateThrottle,
     PasswordResetEmailThrottle,
     RegisterRateThrottle,
 )
 from .tokens import email_verification_token
+from .two_factor import accept_second_factor
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -177,6 +184,7 @@ class MeView(generics.RetrieveUpdateAPIView):
 
 class PasswordChangeView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle, PasswordCheckRateThrottle]
 
     def post(self, request):
         serializer = PasswordChangeSerializer(data=request.data, context={"request": request})
@@ -197,6 +205,7 @@ class PasswordChangeView(APIView):
 
 class AccountDeleteView(APIView):
     permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle, PasswordCheckRateThrottle]
 
     def post(self, request):
         serializer = AccountDeleteSerializer(data=request.data, context={"request": request})
@@ -258,3 +267,78 @@ class PasswordResetConfirmView(APIView):
         # Resetting a password usually means "someone else may have it": end every existing session.
         revoke_all_sessions(user)
         return Response({"detail": "Password has been reset successfully."})
+
+
+class TwoFactorSetupView(APIView):
+    """Start enabling two-factor authentication: a secret for the authenticator app (not yet active).
+
+    Asking again before confirming returns the same pending secret, so a second tab or a retry cannot
+    silently invalidate the key the user already added to their app. Rate-limited: it checks the password.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [AccountTwoFactorThrottle]
+
+    def post(self, request):
+        serializer = TwoFactorSetupSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        user = request.user
+        if user.totp_enabled:
+            return Response({"detail": "Two-factor authentication is already on."}, status=status.HTTP_400_BAD_REQUEST)
+        if not user.totp_secret:
+            user.totp_secret = totp.new_secret()
+            user.totp_last_step = None
+            user.save(update_fields=["totp_secret", "totp_last_step"])
+        return Response(
+            {"secret": user.totp_secret, "otpauth_uri": totp.provisioning_uri(user.totp_secret, user.username)}
+        )
+
+
+class TwoFactorEnableView(APIView):
+    """Confirm the app works (a valid code for the pending secret), switch it on, hand out recovery codes once."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [AccountTwoFactorThrottle]
+
+    def post(self, request):
+        serializer = TwoFactorEnableSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = request.user
+        if user.totp_enabled:
+            return Response({"detail": "Two-factor authentication is already on."}, status=status.HTTP_400_BAD_REQUEST)
+        if not user.totp_secret:
+            return Response({"detail": "Start the setup first."}, status=status.HTTP_400_BAD_REQUEST)
+        step = totp.matching_step(user.totp_secret, serializer.validated_data["code"])
+        if step is None:
+            return Response({"code": ["That code is not valid."]}, status=status.HTTP_400_BAD_REQUEST)
+        codes = totp.new_recovery_codes()
+        user.totp_enabled = True
+        user.totp_last_step = step
+        user.totp_recovery_codes = [totp.hash_recovery_code(code) for code in codes]
+        user.save(update_fields=["totp_enabled", "totp_last_step", "totp_recovery_codes"])
+        # Sessions opened with the password alone end here; this one continues on a fresh pair.
+        revoke_all_sessions(user)
+        refresh = RefreshToken.for_user(user)
+        return Response({"recovery_codes": codes, "access": str(refresh.access_token), "refresh": str(refresh)})
+
+
+class TwoFactorDisableView(APIView):
+    """Switch it off: needs the password and a current code (or a recovery code)."""
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [AccountTwoFactorThrottle]
+
+    def post(self, request):
+        serializer = TwoFactorDisableSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        user = request.user
+        if not user.totp_enabled:
+            return Response({"detail": "Two-factor authentication is not on."}, status=status.HTTP_400_BAD_REQUEST)
+        if not accept_second_factor(user, serializer.validated_data["code"]):
+            return Response({"code": ["That code is not valid."]}, status=status.HTTP_400_BAD_REQUEST)
+        user.totp_enabled = False
+        user.totp_secret = None
+        user.totp_last_step = None
+        user.totp_recovery_codes = []
+        user.save(update_fields=["totp_enabled", "totp_secret", "totp_last_step", "totp_recovery_codes"])
+        return Response(status=status.HTTP_204_NO_CONTENT)

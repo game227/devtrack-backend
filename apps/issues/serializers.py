@@ -59,10 +59,12 @@ class IssueSerializer(serializers.ModelSerializer):
             "due_date",
             "github_number",
             "github_url",
+            "completed_at",
             "created_at",
             "updated_at",
         ]
         read_only_fields = [
+            "completed_at",
             "id",
             "project",
             "number",

@@ -4,6 +4,7 @@ from rest_framework import generics
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 
+from apps.common.filters import StableOrderingFilter
 from apps.common.lookup import body_value, parse_id
 from apps.projects.models import Project
 from apps.workspaces.models import Workspace
@@ -18,8 +19,9 @@ from .serializers import IssueSerializer
 class IssueListCreateView(generics.ListCreateAPIView):
     serializer_class = IssueSerializer
     permission_classes = [IsAuthenticated]
-    filter_backends = [DjangoFilterBackend]
+    filter_backends = [DjangoFilterBackend, StableOrderingFilter]
     filterset_class = IssueFilter
+    ordering_fields = ["completed_at", "created_at", "updated_at", "number", "due_date"]
 
     def get_queryset(self):
         project_id = self.request.query_params.get("project")

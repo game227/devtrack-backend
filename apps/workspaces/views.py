@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.permissions import IsAuthenticated
@@ -7,9 +8,14 @@ from rest_framework.views import APIView
 
 from apps.accounts.throttling import MemberAddRateThrottle
 
-from .models import Membership, Workspace
+from .models import Invitation, Membership, Workspace
 from .permissions import IsWorkspaceAdminOrOwner, IsWorkspaceMember, IsWorkspaceOwner
-from .serializers import MembershipCreateSerializer, MembershipSerializer, WorkspaceSerializer
+from .serializers import (
+    InvitationSerializer,
+    MembershipCreateSerializer,
+    MembershipSerializer,
+    WorkspaceSerializer,
+)
 
 User = get_user_model()
 
@@ -60,11 +66,14 @@ class WorkspaceMembersView(generics.ListCreateAPIView):
         return Membership.objects.filter(workspace=workspace).select_related("user")
 
     def create(self, request, *args, **kwargs):
+        # Adding someone sends an invitation: they only join (and see the workspace) once they accept.
         workspace = self.get_workspace()
-        serializer = MembershipCreateSerializer(data=request.data, context={"workspace": workspace})
+        serializer = MembershipCreateSerializer(
+            data=request.data, context={"workspace": workspace, "invited_by": request.user}
+        )
         serializer.is_valid(raise_exception=True)
-        membership = serializer.save()
-        return Response(MembershipSerializer(membership).data, status=status.HTTP_201_CREATED)
+        invitation = serializer.save()
+        return Response(InvitationSerializer(invitation).data, status=status.HTTP_201_CREATED)
 
 
 class WorkspaceMemberDetailView(APIView):
@@ -81,4 +90,66 @@ class WorkspaceMemberDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         membership.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class WorkspaceInvitationsView(generics.ListAPIView):
+    """Pending invitations of a workspace (admins and owners)."""
+
+    serializer_class = InvitationSerializer
+    permission_classes = [IsAuthenticated, IsWorkspaceAdminOrOwner]
+
+    def get_queryset(self):
+        workspace = get_object_or_404(Workspace, pk=self.kwargs["pk"])
+        self.check_object_permissions(self.request, workspace)
+        return Invitation.objects.filter(workspace=workspace).select_related("workspace", "user", "invited_by")
+
+
+class WorkspaceInvitationDetailView(APIView):
+    """An admin or owner withdraws a pending invitation."""
+
+    permission_classes = [IsAuthenticated, IsWorkspaceAdminOrOwner]
+
+    def delete(self, request, pk, invitation_id):
+        workspace = get_object_or_404(Workspace, pk=pk)
+        self.check_object_permissions(request, workspace)
+        get_object_or_404(Invitation, pk=invitation_id, workspace=workspace).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class MyInvitationsView(generics.ListAPIView):
+    """The invitations waiting for the signed-in user."""
+
+    serializer_class = InvitationSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return (
+            Invitation.objects.valid()
+            .filter(user=self.request.user)
+            .select_related("workspace", "user", "invited_by")
+        )
+
+
+class InvitationResponseView(APIView):
+    """The invitee accepts (becomes a member with the offered role) or declines. Only the invitee can."""
+
+    permission_classes = [IsAuthenticated]
+    accept = False
+
+    def post(self, request, invitation_id):
+        # 404 for anyone else's invitation: its existence is not theirs to know.
+        invitation = get_object_or_404(Invitation, pk=invitation_id, user=request.user)
+        if self.accept and not Invitation.objects.valid().filter(pk=invitation.pk).exists():
+            # Expired, or whoever sent it is no longer an admin here: it cannot grant anything any more.
+            invitation.delete()
+            return Response({"detail": "This invitation is no longer valid."}, status=status.HTTP_404_NOT_FOUND)
+        with transaction.atomic():
+            if self.accept:
+                membership, _ = Membership.objects.get_or_create(
+                    workspace=invitation.workspace, user=request.user, defaults={"role": invitation.role}
+                )
+            invitation.delete()
+        if self.accept:
+            return Response(MembershipSerializer(membership).data, status=status.HTTP_201_CREATED)
         return Response(status=status.HTTP_204_NO_CONTENT)

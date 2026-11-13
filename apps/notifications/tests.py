@@ -69,12 +69,17 @@ class NotificationSignalTests(TestCase):
         )
         self.assertFalse(Notification.objects.filter(recipient=self.assignee, verb="commented").exists())
 
-    def test_being_added_to_a_workspace_notifies_the_new_member(self):
+    def test_being_invited_to_a_workspace_notifies_the_invitee(self):
+        from apps.workspaces.models import Invitation
+
         newcomer = User.objects.create_user(username="ncomer", email="ncomer@example.com", password="pw")
-        Membership.objects.create(workspace=self.workspace, user=newcomer, role=Membership.Role.MEMBER)
+        Invitation.objects.create(workspace=self.workspace, user=newcomer, invited_by=self.reporter)
         self.assertTrue(
             Notification.objects.filter(recipient=newcomer, verb="workspace_invited").exists()
         )
+        # Accepting (becoming a member) does not notify a second time.
+        Membership.objects.create(workspace=self.workspace, user=newcomer, role=Membership.Role.MEMBER)
+        self.assertEqual(Notification.objects.filter(recipient=newcomer).count(), 1)
 
     def test_workspace_owner_membership_does_not_notify(self):
         # The owner's own Membership row is created at workspace-creation time;

@@ -15,6 +15,8 @@ of the workspace the object lives in.
 - Everything an object points at must be in the same workspace: an issue's assignee (an active member),
   labels (the workspace's, or the issue's own project's), cycle and milestone (the issue's project); a
   project's team. Ids from elsewhere get the same "does not exist" answer as ids that were never there.
+- Joining a workspace takes the invitee's consent: an admin's "add member" creates an invitation, and
+  the person becomes a member (and sees anything) only after accepting it. Admins can withdraw it.
 - Only workspace members can be added to its projects and teams; deactivated accounts cannot be added.
 - Someone removed from a workspace loses every right that came from being in it — including over issues
   and projects they created — and stops receiving its notifications (in-app and Telegram).
@@ -26,10 +28,13 @@ of the workspace the object lives in.
 - JWT: 15-minute access tokens, 14-day refresh tokens rotated on use and blacklisted afterwards.
   Changing or resetting a password, and deleting the account, revoke every outstanding refresh token
   (a password change hands the current session a fresh pair).
+- Optional two-factor authentication (TOTP, RFC 6238): the secret is encrypted at rest, each code works
+  once (replays are refused), ten single-use recovery codes are stored hashed, turning it on ends every
+  password-only session, and turning it off needs the password and a code. Attempts are rate-limited.
 - Passwords: Argon2 (older PBKDF2 hashes upgrade on next login) and Django's validators. Reset and
   email-verification links expire after a day and are single-use.
-- Usernames and emails are unique case-insensitively for new accounts; new usernames are ASCII-only
-  (no look-alike letters from other scripts).
+- Usernames and emails are unique case-insensitively, enforced by the database (the migration stops
+  with a list if existing accounts collide); new usernames are ASCII-only (no look-alike letters).
 - Rate limits: per IP (`anon`, `register`), and per *target* where an IP limit can be dodged — login
   attempts per account, password-reset emails per address — plus member invitations and manual GitHub
   syncs per user.
@@ -88,18 +93,13 @@ of the workspace the object lives in.
 4. Running more than one gunicorn worker or instance? Point `CACHE_URL` at a shared cache, or each one
    keeps its own rate-limit counters.
 5. Once HTTPS and the domain are stable, ramp `SECURE_HSTS_SECONDS` up (3600 → 86400 → 31536000).
-6. Schedule backups (docs/BACKUP.md).
+6. Give the `devtrack-db-backup` cron job its bucket credentials (docs/BACKUP.md) and rehearse a restore.
 
 ## Known limitations
 
 - The refresh token is kept in `localStorage`, so a successful XSS could read it; the strict CSP is the
   mitigation. An httpOnly cookie is not used because the frontend and the API are on different sites
   (`onrender.com` is a public suffix), where browsers increasingly block such cookies.
-- Adding someone to a workspace needs only their username and no consent from them; it is rate-limited
-  and members only see what is in that workspace, but an invitation/acceptance flow would close it. The
-  same endpoint lets a workspace admin learn whether a username exists.
+- Inviting by username lets a workspace admin learn whether a username exists (rate-limited).
 - Repository links are first come, first served among people who can read the repository.
-- No two-factor authentication.
-- Accounts created before case-insensitive uniqueness may include case-variant duplicates; there is no
-  database constraint enforcing it.
 - The Telegram bot service is a separate repository and was not part of this review.

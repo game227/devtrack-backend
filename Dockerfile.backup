@@ -1,0 +1,27 @@
+# Image for the scheduled database backup only (render.yaml: devtrack-db-backup). It adds pg_dump, which
+# the internet-facing web image has no reason to carry (nor a build-time dependency on another apt repo).
+FROM python:3.14-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid app --home-dir /app --shell /usr/sbin/nologin app
+
+# pg_dump from the PostgreSQL project's own repository: pg_dump refuses servers newer than itself, and a
+# recent client also dumps older servers.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates postgresql-common \
+ && /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y \
+ && apt-get install -y --no-install-recommends postgresql-client-18 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY --chown=app:app . .
+
+USER app
+CMD ["python", "manage.py", "backup_database"]

@@ -275,7 +275,10 @@ class NotificationPushTests(TestCase):
 
     @patch("apps.telegram_bot.notify.services.notify")
     def test_workspace_and_project_invitations(self, mock_notify):
-        self.join(self.dev)
+        from apps.workspaces.models import Invitation
+
+        Invitation.objects.create(workspace=self.workspace, user=self.dev, invited_by=self.owner)
+        self.join(self.dev)  # accepted
         self.assertEqual(mock_notify.call_args.args[0]["path"], "/dashboard")
         self.assertEqual(mock_notify.call_args.args[0]["title"], "Push WS")
         from apps.projects.models import ProjectMember

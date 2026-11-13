@@ -206,3 +206,58 @@ class AvatarUploadTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.user.refresh_from_db()
         self.assertFalse(self.user.avatar)
+
+
+class DatabaseIdentityConstraintTests(TestCase):
+    """The serializer check can be raced by two simultaneous sign-ups; the database settles it."""
+
+    def test_usernames_differing_only_by_case_cannot_both_exist(self):
+        from django.db import IntegrityError, transaction
+
+        User.objects.create_user(username="Jane", email="jane1@example.com", password=STRONG)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            User.objects.create_user(username="jane", email="jane2@example.com", password=STRONG)
+
+    def test_emails_differing_only_by_case_cannot_both_exist(self):
+        from django.db import IntegrityError, transaction
+
+        User.objects.create_user(username="a1", email="Same@Example.com", password=STRONG)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            User.objects.create_user(username="a2", email="same@example.com", password=STRONG)
+
+
+class LostRaceTests(TestCase):
+    """Two sign-ups (or invitations) at the same instant both pass the checks; the database decides, and
+    the loser must get the normal 400 answer rather than a 500."""
+
+    def test_a_sign_up_that_loses_to_a_case_variant_is_a_validation_error(self):
+        from rest_framework.exceptions import ValidationError
+
+        from .serializers import RegisterSerializer
+
+        User.objects.create_user(username="Racer", email="racer@example.com", password=STRONG)
+        with self.assertRaises(ValidationError) as caught:
+            RegisterSerializer().create({"username": "racer", "email": "other@example.com", "password": STRONG})
+        self.assertIn("username", caught.exception.detail)
+        with self.assertRaises(ValidationError) as caught:
+            RegisterSerializer().create({"username": "fresh", "email": "RACER@example.com", "password": STRONG})
+        self.assertIn("email", caught.exception.detail)
+
+    def test_an_invitation_that_loses_a_race_is_a_validation_error(self):
+        from unittest.mock import patch
+
+        from django.db import IntegrityError
+        from rest_framework.exceptions import ValidationError
+
+        from apps.workspaces.models import Invitation, Membership, Workspace
+        from apps.workspaces.serializers import MembershipCreateSerializer
+
+        owner = User.objects.create_user(username="own", email="own@example.com", password=STRONG)
+        guest = User.objects.create_user(username="guest", email="guest@example.com", password=STRONG)
+        workspace = Workspace.objects.create(name="Race", owner=owner)
+        Membership.objects.create(workspace=workspace, user=owner, role="owner")
+        serializer = MembershipCreateSerializer(data={"username": "guest"}, context={"workspace": workspace, "invited_by": owner})
+        self.assertTrue(serializer.is_valid())
+        with patch.object(Invitation.objects, "create", side_effect=IntegrityError("duplicate key")), self.assertRaises(ValidationError):
+            serializer.save()
+        self.assertFalse(Invitation.objects.filter(user=guest).exists())

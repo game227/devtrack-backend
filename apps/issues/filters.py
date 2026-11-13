@@ -6,6 +6,9 @@ from .models import Issue
 class IssueFilter(django_filters.FilterSet):
     label = django_filters.NumberFilter(field_name="labels__id")
     assignee = django_filters.CharFilter(method="filter_assignee")
+    # The board loads open work and finished work separately, so a project with thousands of finished
+    # issues does not download all of them to show the latest few.
+    exclude_status = django_filters.ChoiceFilter(field_name="status", choices=Issue.Status.choices, exclude=True)
 
     class Meta:
         model = Issue

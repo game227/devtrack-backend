@@ -52,6 +52,11 @@ rule-based project health (with structured, localizable risks), developer analyt
   Done and is logged once.
 - **Issue numbers**: every issue has a number within its project (`#1`, `#2`, ...), shown in the UI and
   used for `#<number>` references. Numbers are never reused, even after a delete.
+- **Workspace invitations**: adding someone (`POST /workspaces/<id>/members/`) invites them; they accept or
+  decline at `/workspaces/invitations/` (the dashboard shows pending ones). Admins list or withdraw
+  pending invitations at `/workspaces/<id>/invitations/`.
+- **Two-factor authentication**: `/auth/2fa/setup|enable|disable/`; sign-in then needs `otp`.
+- **Backups**: `manage.py backup_database` (scheduled on Render, see docs/BACKUP.md).
 - **Who can edit an issue**: its creator (everything) and its assignee (status and priority only);
   workspace admins can delete it. Anyone who leaves a workspace loses these rights.
 - **Telegram**: password-reset links go to Telegram first (if linked) and fall back to email; if the bot

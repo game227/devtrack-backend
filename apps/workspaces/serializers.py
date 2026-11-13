@@ -1,7 +1,8 @@
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
-from .models import Membership, Workspace
+from .models import Invitation, Membership, Workspace
 
 User = get_user_model()
 
@@ -64,11 +65,40 @@ class MembershipCreateSerializer(serializers.Serializer):
         workspace = self.context["workspace"]
         if Membership.objects.filter(workspace=workspace, user=self._user).exists():
             raise serializers.ValidationError({"username": "User is already a member of this workspace."})
+        if Invitation.objects.valid().filter(workspace=workspace, user=self._user).exists():
+            raise serializers.ValidationError({"username": "User has already been invited to this workspace."})
         attrs["user"] = self._user
         return attrs
 
     def save(self):
-        workspace = self.context["workspace"]
-        return Membership.objects.create(
-            workspace=workspace, user=self.validated_data["user"], role=self.validated_data["role"]
-        )
+        workspace, user = self.context["workspace"], self.validated_data["user"]
+        try:
+            with transaction.atomic():
+                # An expired or orphaned earlier invitation is replaced by this one.
+                Invitation.objects.filter(workspace=workspace, user=user).delete()
+                return Invitation.objects.create(
+                    workspace=workspace,
+                    user=user,
+                    invited_by=self.context["invited_by"],
+                    role=self.validated_data["role"],
+                )
+        except IntegrityError as exc:
+            # Two admins invited the same person at the same moment.
+            raise serializers.ValidationError({"username": "User has already been invited to this workspace."}) from exc
+
+
+class WorkspaceBriefSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Workspace
+        fields = ["id", "name"]
+
+
+class InvitationSerializer(serializers.ModelSerializer):
+    workspace = WorkspaceBriefSerializer(read_only=True)
+    user = UserBriefSerializer(read_only=True)
+    invited_by = UserBriefSerializer(read_only=True)
+
+    class Meta:
+        model = Invitation
+        fields = ["id", "workspace", "user", "invited_by", "role", "created_at"]
+        read_only_fields = fields

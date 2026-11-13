@@ -190,3 +190,33 @@ services:
       - key: TELEGRAM_BOT_SERVICE_URL
         value: https://devtrack-telegram-bot.onrender.com
       - fromGroup: devtrack-shared-secrets
+
+  # Daily database backup: pg_dump (custom format) uploaded to an S3-compatible bucket (Cloudflare R2,
+  # S3, ...) under backups/, keeping BACKUP_RETENTION_DAYS days. See docs/BACKUP.md for restoring.
+  # 02:00 UTC = 07:00 in Tashkent.
+  - type: cron
+    name: devtrack-db-backup
+    runtime: docker
+    dockerfilePath: ./Dockerfile.backup
+    schedule: "0 2 * * *"
+    dockerCommand: python manage.py backup_database
+    plan: starter
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.prod
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: devtrack-db
+          property: connectionString
+      - key: BACKUP_BUCKET
+        sync: false
+      - key: BACKUP_ENDPOINT_URL
+        sync: false
+      - key: BACKUP_ACCESS_KEY
+        sync: false
+      - key: BACKUP_SECRET_KEY
+        sync: false
+      - key: BACKUP_RETENTION_DAYS
+        value: "14"

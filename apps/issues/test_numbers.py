@@ -143,3 +143,74 @@ class NumberBackfillMigrationTests(TransactionTestCase):
         self.assertEqual(
             [Project.objects.get(pk=p.pk).issue_counter for p in (plain, imported, empty)], [3, 9, 0]
         )
+
+
+class CompletedAtTests(TestCase):
+    def setUp(self):
+        self.owner, self.project = make_project(suffix="-done")
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+
+    def test_set_when_done_and_cleared_when_reopened_by_any_path(self):
+        from apps.integrations.workflow import advance_issue
+
+        issue = Issue.objects.create(project=self.project, title="t", reporter=self.owner)
+        self.assertIsNone(issue.completed_at)
+        advance_issue(issue, Issue.Status.DONE, self.owner)  # save(update_fields=[...]) path
+        issue.refresh_from_db()
+        self.assertIsNotNone(issue.completed_at)
+        self.client.patch(f"/api/v1/issues/{issue.id}/", {"status": "todo"}, format="json")
+        issue.refresh_from_db()
+        self.assertIsNone(issue.completed_at)
+        created_done = Issue.objects.create(project=self.project, title="d", reporter=self.owner, status="done")
+        self.assertIsNotNone(created_done.completed_at)
+
+    def test_the_board_can_load_open_work_and_the_latest_finished_work_separately(self):
+        import datetime
+
+        from django.utils import timezone
+
+        for i in range(3):
+            Issue.objects.create(project=self.project, title=f"open {i}", reporter=self.owner)
+        finished = [Issue.objects.create(project=self.project, title=f"done {i}", reporter=self.owner, status="done") for i in range(3)]
+        for offset, issue in enumerate(finished):
+            Issue.objects.filter(pk=issue.pk).update(completed_at=timezone.now() - datetime.timedelta(days=offset))
+        base = f"/api/v1/issues/?project={self.project.id}"
+        open_rows = self.client.get(base + "&exclude_status=done").data
+        done_rows = self.client.get(base + "&status=done&ordering=-completed_at").data
+        self.assertEqual(open_rows["count"], 3)
+        self.assertEqual([r["title"] for r in done_rows["results"]], ["done 0", "done 1", "done 2"])
+        self.assertEqual(self.client.get(base + "&ordering=password").status_code, 200)  # unknown fields are ignored
+
+
+class StableOrderingTests(TestCase):
+    """Paging through a client-chosen order must neither repeat nor skip issues."""
+
+    def setUp(self):
+        self.owner, self.project = make_project(suffix="-order")
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+
+    def collect(self, ordering):
+        seen, page = [], 1
+        while True:
+            data = self.client.get(f"/api/v1/issues/?project={self.project.id}&ordering={ordering}&page={page}").data
+            seen += [row["id"] for row in data["results"]]
+            if not data["next"]:
+                return seen
+            page += 1
+
+    def test_ties_and_empty_values_page_deterministically_with_empty_values_last(self):
+        import datetime
+
+        dated = [
+            Issue.objects.create(project=self.project, title=f"d{i}", reporter=self.owner, due_date=datetime.date(2026, 1, 1 + i % 3))
+            for i in range(9)
+        ]
+        undated = [Issue.objects.create(project=self.project, title=f"u{i}", reporter=self.owner) for i in range(45)]
+        for ordering in ("due_date", "-due_date", "-completed_at"):
+            ids = self.collect(ordering)
+            self.assertEqual(len(ids), len(set(ids)), ordering)  # nothing twice
+            self.assertEqual(set(ids), {i.id for i in dated + undated}, ordering)  # nothing missed
+        ids = self.collect("due_date")
+        self.assertEqual(set(ids[: len(dated)]), {i.id for i in dated})  # issues without a date come last
