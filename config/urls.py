@@ -36,6 +36,7 @@ urlpatterns = [
     path("api/v1/notifications/", include("apps.notifications.urls")),
     path("api/v1/integrations/", include("apps.integrations.urls")),
     path("api/v1/telegram/", include("apps.telegram_bot.urls")),
+    path("api/v1/changes/", include("apps.live.urls")),
 ]
 
 if settings.DEBUG:

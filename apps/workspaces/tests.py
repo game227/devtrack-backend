@@ -236,7 +236,7 @@ class InvitationValidityTests(TestCase):
         self.as_guest.force_authenticate(self.guest)
         self.as_owner.force_authenticate(self.owner)
         members = reverse("workspace-members", kwargs={"pk": self.workspace.pk})
-        response = self.as_admin.post(members, {"username": "vguest", "role": "admin"}, format="json")
+        response = self.as_admin.post(members, {"username": "vguest"}, format="json")
         self.assertEqual(response.status_code, 201)
         self.invitation_id = response.data["id"]
         self.members_url = members

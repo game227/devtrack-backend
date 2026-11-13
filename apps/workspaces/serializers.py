@@ -63,6 +63,8 @@ class MembershipCreateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         workspace = self.context["workspace"]
+        if attrs.get("role") == Membership.Role.ADMIN and self.context.get("inviter_role") != Membership.Role.OWNER:
+            raise serializers.ValidationError({"role": "Only the owner can make someone an admin."})
         if Membership.objects.filter(workspace=workspace, user=self._user).exists():
             raise serializers.ValidationError({"username": "User is already a member of this workspace."})
         if Invitation.objects.valid().filter(workspace=workspace, user=self._user).exists():

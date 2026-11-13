@@ -51,6 +51,8 @@
 | `issues.0006` | `number` required + unique per project | none after 0005 |
 | `issues.0007` | `completed_at`, backfilled from `updated_at` for done issues | additive |
 | `workspaces.0003` | Invitations table | additive |
+| `integrations.0004` | Parked GitHub authorizations (OAuth flow bound to the browser) | additive |
+| `live.0001` | Per-workspace change clock for live updates | additive |
 
 The data migrations were tested against real data (see `apps/issues/test_numbers.py`) and applied to
 the development database. Several of them add required columns (`issues.number`,
@@ -100,13 +102,31 @@ python manage.py migrate issues 0004
 python manage.py migrate projects 0005
 python manage.py migrate workspaces 0002
 python manage.py migrate accounts 0004
+python manage.py migrate integrations 0003
+python manage.py migrate live zero
 ```
 
 This was rehearsed on a seeded copy: all eight migrations reverse cleanly, and the `master` code then
 creates users and issues normally. Reversing drops the new data: issue numbers, completion times,
 invitations and two-factor settings. If that matters, restore the backup from step 1.1 instead.
 
-## 7. Deliberately left for later
+## 7. Live updates, stage 2 (planned)
+
+Today the SPA asks `/changes/` every 10 s while the tab is visible. To get ~1 s updates:
+
+1. Serve Django under ASGI (gunicorn with uvicorn workers, or daphne). A long-lived stream would tie up a
+   sync gunicorn worker per open tab.
+2. Add `GET /api/v1/events/` as a server-sent-events stream. A post-commit hook on `touch()` publishes
+   `NOTIFY workspace_<id>, '<area>'`; the stream `LISTEN`s with an async psycopg connection. This is
+   PostgreSQL only, with no Redis.
+3. Authenticate the stream with a single-use, short-lived ticket from an authenticated `POST`, because
+   `EventSource` cannot send an `Authorization` header. Membership is checked when the stream opens and
+   rechecked on every event.
+4. Keep `/changes/` as the fallback while the stream is down, so nothing regresses if it fails.
+
+Render: the web service's start command changes. Measure memory per open stream before raising the plan.
+
+## 8. Deliberately left for later
 
 - A custom domain shared by the frontend and the API would allow an httpOnly refresh cookie (instead of
   `localStorage`) and a simpler CSP `connect-src`.

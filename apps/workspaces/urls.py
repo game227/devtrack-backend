@@ -6,9 +6,11 @@ from .views import (
     WorkspaceDetailView,
     WorkspaceInvitationDetailView,
     WorkspaceInvitationsView,
+    WorkspaceLeaveView,
     WorkspaceListCreateView,
     WorkspaceMemberDetailView,
     WorkspaceMembersView,
+    WorkspaceTransferOwnershipView,
 )
 
 urlpatterns = [
@@ -25,6 +27,8 @@ urlpatterns = [
         name="invitation-decline",
     ),
     path("<int:pk>/invitations/", WorkspaceInvitationsView.as_view(), name="workspace-invitations"),
+    path("<int:pk>/leave/", WorkspaceLeaveView.as_view(), name="workspace-leave"),
+    path("<int:pk>/transfer-ownership/", WorkspaceTransferOwnershipView.as_view(), name="workspace-transfer-ownership"),
     path(
         "<int:pk>/invitations/<int:invitation_id>/",
         WorkspaceInvitationDetailView.as_view(),

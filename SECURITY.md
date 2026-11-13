@@ -18,6 +18,12 @@ of the workspace the object lives in.
 - Joining a workspace takes the invitee's consent: an admin's "add member" creates an invitation, and
   the person becomes a member (and sees anything) only after accepting it. Admins can withdraw it.
 - Only workspace members can be added to its projects and teams; deactivated accounts cannot be added.
+- Managing members follows one table (`apps/workspaces/membership.py`): only the owner changes roles or
+  invites admins, admins remove plain members only, nobody removes the owner, and the owner leaves only
+  after handing the workspace over. Leaving or being removed ends that person's project and team
+  memberships there and unassigns their open work.
+- `/changes/` only answers members, and only with area names ("issues changed"); everything is still
+  read through the permission-checked endpoints.
 - Someone removed from a workspace loses every right that came from being in it — including over issues
   and projects they created — and stops receiving its notifications (in-app and Telegram).
 - Issue edits: the creator may change anything, the assignee only `status` and `priority`; admins and

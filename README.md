@@ -55,6 +55,14 @@ rule-based project health (with structured, localizable risks), developer analyt
 - **Workspace invitations**: adding someone (`POST /workspaces/<id>/members/`) invites them; they accept or
   decline at `/workspaces/invitations/` (the dashboard shows pending ones). Admins list or withdraw
   pending invitations at `/workspaces/<id>/invitations/`.
+- **Managing members** (owner/admin): change roles (`PATCH /workspaces/<id>/members/<user>/`, owner only),
+  remove (`DELETE`, admins remove members only), `POST /workspaces/<id>/leave/`, and
+  `POST /workspaces/<id>/transfer-ownership/`. Removing or leaving drops that person's project and team
+  memberships there and unassigns their open issues. Every change appears in the activity feed. The rules
+  are in `apps/workspaces/membership.py`.
+- **Live updates**: `GET /changes/?workspace=<id>&since=<cursor>` names what changed (issues, projects,
+  members, and the caller's notifications/invitations), never the data itself. The SPA asks every 10 s
+  while visible and refetches only those parts (`apps/live`).
 - **Two-factor authentication**: `/auth/2fa/setup|enable|disable/`; sign-in then needs `otp`.
 - **Backups**: `manage.py backup_database` (scheduled on Render, see docs/BACKUP.md).
 - **Who can edit an issue**: its creator (everything) and its assignee (status and priority only);
