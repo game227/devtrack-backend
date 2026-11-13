@@ -141,14 +141,16 @@ services:
     routes:
       - source: /*
         destination: /index.html
-    # 'unsafe-inline' on script-src is needed for the pre-paint theme script
-    # in index.html (see that file's comment); everything else is locked to
-    # the app's own origin, the backend API, and Google Fonts.
+    # script-src allows the one inline script (the pre-paint theme script in index.html) by its
+    # SHA-256 hash instead of 'unsafe-inline', so an injected inline script cannot run. The hash only
+    # matches those exact bytes: the frontend's CI runs `npm run check:csp` and fails if index.html
+    # changes without this value being updated. Everything else is locked to the app's own origin,
+    # the backend API, and Google Fonts. (style-src keeps 'unsafe-inline': React sets inline styles.)
     headers:
       - path: /*
         name: Content-Security-Policy
         value: >-
-          default-src 'self'; script-src 'self' 'unsafe-inline';
+          default-src 'self'; script-src 'self' 'sha256-7m9d48QF1iYJf66zfapO/vi1jxRJMj/O9Ge0xXRiB24=';
           style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
           font-src 'self' https://fonts.gstatic.com;
           img-src 'self' data: https://devtrack-backend.onrender.com;

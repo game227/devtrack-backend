@@ -7,9 +7,8 @@ from django.dispatch import receiver
 from apps.comments.models import Comment
 from apps.issues.models import Issue
 from apps.projects.models import ProjectMember
-from apps.workspaces.models import Membership
-
 from apps.telegram_bot.notify import push_notification
+from apps.workspaces.models import Membership, Workspace
 
 from .models import Notification
 
@@ -17,8 +16,32 @@ User = get_user_model()
 MENTION_RE = re.compile(r"@(\w+)")
 
 
+def _workspace_of(target):
+    """The workspace a notification target lives in (None when it cannot be determined)."""
+    if isinstance(target, Comment):
+        target = target.content_object
+    if target is None:
+        return None
+    if isinstance(target, Workspace):
+        return target
+    if hasattr(target, "project"):  # an issue
+        return target.project.workspace
+    return getattr(target, "workspace", None)  # a project
+
+
+def _is_member(recipient, target):
+    workspace = _workspace_of(target)
+    return workspace is not None and Membership.objects.filter(workspace=workspace, user=recipient).exists()
+
+
 def _notify(recipient, actor, verb, target):
     if recipient is None or recipient_id_equals_actor(recipient, actor):
+        return
+    # Only people who belong to the workspace are told about what happens in it — and shown its titles
+    # and comment excerpts (in-app and via Telegram). This also covers someone who was removed from the
+    # workspace but is still the assignee/reporter/owner of something in it, and an @mention of a
+    # username that happens to exist elsewhere.
+    if not _is_member(recipient, target):
         return
     notification = Notification.objects.create(recipient=recipient, verb=verb, target=target)
     push_notification(notification, actor)

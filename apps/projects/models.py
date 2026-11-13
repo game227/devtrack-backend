@@ -35,6 +35,9 @@ class Project(models.Model):
     )
     repository_url = models.URLField(blank=True)
     tech_stack = models.JSONField(default=dict, blank=True)
+    # Highest issue number handed out so far. A counter (rather than MAX(number) + 1) means a number is
+    # never reused after its issue is deleted, so "#12" in an old commit never points at a different issue.
+    issue_counter = models.PositiveIntegerField(default=0, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

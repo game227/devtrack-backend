@@ -6,10 +6,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.workspaces.models import Workspace
+from apps.accounts.throttling import MemberAddRateThrottle
+from apps.common.lookup import body_value, parse_id
+from apps.workspaces.models import Membership, Workspace
 from apps.workspaces.permissions import get_membership
-
-from apps.workspaces.models import Membership
 
 from .models import Label, Note, Project, ProjectMember
 from .permissions import CanManageProject, IsProjectWorkspaceMember
@@ -33,16 +33,28 @@ class ProjectListCreateView(generics.ListCreateAPIView):
         workspace_id = self.request.query_params.get("workspace")
         if not workspace_id:
             raise ValidationError({"workspace": "This query parameter is required."})
-        workspace = get_object_or_404(Workspace, pk=workspace_id)
+        workspace = get_object_or_404(Workspace, pk=parse_id(workspace_id, "workspace"))
         if get_membership(self.request.user, workspace) is None:
             raise PermissionDenied("You are not a member of this workspace.")
         return Project.objects.filter(workspace=workspace).select_related("owner").order_by("-created_at")
 
+    def get_target_workspace(self):
+        """The workspace a new project goes into, resolved and authorized before the body is validated."""
+        if not hasattr(self, "_target_workspace"):
+            workspace = get_object_or_404(Workspace, pk=parse_id(body_value(self.request, "workspace"), "workspace"))
+            if get_membership(self.request.user, workspace) is None:
+                raise PermissionDenied("You are not a member of this workspace.")
+            self._target_workspace = workspace
+        return self._target_workspace
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.request.method == "POST":
+            context["workspace"] = self.get_target_workspace()
+        return context
+
     def perform_create(self, serializer):
-        workspace = get_object_or_404(Workspace, pk=self.request.data.get("workspace"))
-        if get_membership(self.request.user, workspace) is None:
-            raise PermissionDenied("You are not a member of this workspace.")
-        project = serializer.save(workspace=workspace, owner=self.request.user)
+        project = serializer.save(workspace=self.get_target_workspace(), owner=self.request.user)
         ProjectMember.objects.create(project=project, user=self.request.user, role="owner")
 
 
@@ -63,6 +75,10 @@ class ProjectMembersView(generics.ListCreateAPIView):
         if self.request.method == "POST":
             return [IsAuthenticated(), CanManageProject()]
         return [IsAuthenticated(), IsProjectWorkspaceMember()]
+
+    def get_throttles(self):
+        throttles = super().get_throttles()
+        return throttles + [MemberAddRateThrottle()] if self.request.method == "POST" else throttles
 
     def get_project(self):
         project = get_object_or_404(Project, pk=self.kwargs["pk"])
@@ -111,19 +127,30 @@ class LabelListCreateView(generics.ListCreateAPIView):
         project_id = self.request.query_params.get("project")
         if not workspace_id:
             raise ValidationError({"workspace": "This query parameter is required."})
-        workspace = get_object_or_404(Workspace, pk=workspace_id)
+        workspace = get_object_or_404(Workspace, pk=parse_id(workspace_id, "workspace"))
         if get_membership(self.request.user, workspace) is None:
             raise PermissionDenied("You are not a member of this workspace.")
         qs = Label.objects.filter(workspace=workspace)
         if project_id:
-            qs = qs.filter(project_id=project_id)
+            qs = qs.filter(project_id=parse_id(project_id, "project"))
         return qs.order_by("name")
 
+    def get_target_workspace(self):
+        if not hasattr(self, "_target_workspace"):
+            workspace = get_object_or_404(Workspace, pk=parse_id(body_value(self.request, "workspace"), "workspace"))
+            if get_membership(self.request.user, workspace) is None:
+                raise PermissionDenied("You are not a member of this workspace.")
+            self._target_workspace = workspace
+        return self._target_workspace
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.request.method == "POST":
+            context["workspace"] = self.get_target_workspace()
+        return context
+
     def perform_create(self, serializer):
-        workspace = get_object_or_404(Workspace, pk=self.request.data.get("workspace"))
-        if get_membership(self.request.user, workspace) is None:
-            raise PermissionDenied("You are not a member of this workspace.")
-        serializer.save()
+        serializer.save(workspace=self.get_target_workspace())
 
 
 class LabelDetailView(generics.RetrieveUpdateDestroyAPIView):

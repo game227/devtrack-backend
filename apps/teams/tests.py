@@ -68,6 +68,7 @@ class TeamDetailAndMembersViewTests(TestCase):
         self.workspace = Workspace.objects.create(name="TDWS", owner=self.owner)
         Membership.objects.create(workspace=self.workspace, user=self.owner, role=Membership.Role.OWNER)
         Membership.objects.create(workspace=self.workspace, user=self.member, role=Membership.Role.MEMBER)
+        Membership.objects.create(workspace=self.workspace, user=self.newcomer, role=Membership.Role.MEMBER)
         self.team = Team.objects.create(workspace=self.workspace, name="Core")
         TeamMembership.objects.create(team=self.team, user=self.owner)
         self.detail_url = reverse("team-detail", kwargs={"pk": self.team.pk})

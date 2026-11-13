@@ -1,0 +1,7 @@
+-r requirements.txt
+
+# Test and lint tooling (not installed in the production image).
+tblib==3.2.2        # lets `manage.py test --parallel` report failures instead of crashing on a traceback
+coverage==7.17.3
+ruff==0.17.5
+pip-audit==2.10.1

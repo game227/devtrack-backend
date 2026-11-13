@@ -7,14 +7,18 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import signing
 from django.db import IntegrityError, transaction
+from django.db.models import F
+from django.db.models.functions import Greatest
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
+from apps.accounts.throttling import GithubSyncRateThrottle
 from apps.activities.models import Activity
 from apps.issues.models import Issue
 from apps.projects.models import Label, Project, ProjectMember
@@ -24,7 +28,6 @@ from apps.workspaces.permissions import get_membership
 from . import services
 from .models import GitHubAccount, GitHubCommit, GitHubPullRequest, GitHubRepositoryLink
 from .parsing import extract_issue_ids
-from .workflow import advance_issue, branch_from_ref, parse_github_datetime
 from .serializers import (
     GitHubCommitSerializer,
     GitHubImportSerializer,
@@ -32,6 +35,7 @@ from .serializers import (
     GitHubRepositoryLinkCreateSerializer,
     GitHubRepositoryLinkSerializer,
 )
+from .workflow import advance_issue, branch_from_ref, parse_github_datetime
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -174,13 +178,13 @@ class ProjectGitHubLinkView(APIView):
 
         serializer = GitHubRepositoryLinkCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        github_repo_id = serializer.validated_data["github_repo_id"]
-        full_name = serializer.validated_data["full_name"]
+        repo = _verified_repo(account, serializer.validated_data["github_repo_id"], serializer.validated_data["full_name"])
 
-        if GitHubRepositoryLink.objects.filter(github_repo_id=github_repo_id).exists():
+        if GitHubRepositoryLink.objects.filter(github_repo_id=repo["id"]).exists():
             raise ValidationError({"detail": "This repository is already linked to another project."})
 
-        link, warning = _link_repository(project, request.user, account, github_repo_id, full_name)
+        # GitHub's own spelling of the name, not the client's.
+        link, warning = _link_repository(project, request.user, account, repo["id"], repo["full_name"])
         return Response(_link_response(link, warning), status=status.HTTP_201_CREATED)
 
     def delete(self, request, project_id):
@@ -227,6 +231,23 @@ def _verify_signature(body, header):
     return hmac.compare_digest(expected, header)
 
 
+def _verified_repo(account, github_repo_id, full_name):
+    """The repository as GitHub reports it, checked with the caller's own token.
+
+    The id and name in the request body are claims, not facts. Without this check anyone could "link"
+    an arbitrary repository id they cannot even see — squatting on it so its real owners could never
+    link it — or pair one repository's id with another's name. GitHub answers 404 for a repository the
+    token cannot read, and the id it returns must be the id that was claimed.
+    """
+    try:
+        repo = services.get_repo(account.access_token, full_name)
+    except services.GitHubAPIError as exc:
+        raise ValidationError({"detail": str(exc)})
+    if repo.get("id") != github_repo_id:
+        raise ValidationError({"detail": "That repository id does not belong to that repository."})
+    return repo
+
+
 def _link_repository(project, user, account, github_repo_id, full_name):
     """Link a repository to a project and try to install its webhook.
 
@@ -238,6 +259,9 @@ def _link_repository(project, user, account, github_repo_id, full_name):
     callback_url = settings.GITHUB_WEBHOOK_CALLBACK_URL
     if not services.is_public_url(callback_url):
         warning = {"code": "not_public_url", "detail": callback_url}
+    elif not settings.GITHUB_WEBHOOK_SECRET:
+        # A hook created without a secret would deliver unsigned events, and every one would be rejected.
+        warning = {"code": "github_rejected", "detail": "GITHUB_WEBHOOK_SECRET is not configured on the server."}
     else:
         try:
             hook = services.create_webhook(account.access_token, full_name, callback_url, settings.GITHUB_WEBHOOK_SECRET)
@@ -262,17 +286,11 @@ def _link_response(link, warning):
 
 
 def _match_issues(project, ids):
-    """Issues of `project` that `#<id>` references point at.
-
-    In a project with imported GitHub issues, `#12` means GitHub's issue 12 (that is what people type
-    in commits); otherwise it is the DevTrack issue id. GitHub numbering wins when both exist.
+    """Issues of `project` that `#<n>` references point at: `n` is the issue's number within the project
+    (what the UI shows). An issue imported from GitHub keeps GitHub's own number, so `#12` in a commit
+    means GitHub's issue 12 there. Only this project's issues are ever matched.
     """
-    if not ids:
-        return []
-    by_number = list(Issue.objects.filter(project=project, github_number__in=ids))
-    remaining = set(ids) - {issue.github_number for issue in by_number}
-    by_id = list(Issue.objects.filter(project=project, id__in=remaining)) if remaining else []
-    return by_number + by_id
+    return list(Issue.objects.filter(project=project, number__in=ids)) if ids else []
 
 
 def _upsert(model, retry_once=True, **kwargs):
@@ -518,6 +536,7 @@ class ProjectGitHubSyncView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle, GithubSyncRateThrottle]
 
     def post(self, request, project_id):
         project = get_object_or_404(Project, pk=project_id)
@@ -582,12 +601,13 @@ def _import_issues(project, user, workspace, github_issues):
     for item in github_issues:
         label_data = item.get("labels") or []
         issue_type = next(
-            (ISSUE_TYPE_BY_LABEL[l["name"].lower()] for l in label_data if l.get("name", "").lower() in ISSUE_TYPE_BY_LABEL),
+            (ISSUE_TYPE_BY_LABEL[lb["name"].lower()] for lb in label_data if lb.get("name", "").lower() in ISSUE_TYPE_BY_LABEL),
             Issue.Type.TASK,
         )
         body = item.get("body") or ""
         issue = Issue.objects.create(
             project=project,
+            number=item["number"],
             title=(item.get("title") or f"GitHub issue #{item['number']}")[:200],
             description=body,
             type=issue_type,
@@ -597,8 +617,13 @@ def _import_issues(project, user, workspace, github_issues):
             github_number=item["number"],
             github_url=item.get("html_url", ""),
         )
-        issue.labels.set([label for label in (label_for(l) for l in label_data) if label is not None])
+        issue.labels.set([label for label in (label_for(lb) for lb in label_data) if label is not None])
         imported += 1
+    if github_issues:
+        # Issues created in DevTrack from now on continue after the highest imported (GitHub) number.
+        Project.objects.filter(pk=project.pk).update(
+            issue_counter=Greatest(F("issue_counter"), max(item["number"] for item in github_issues))
+        )
     return imported
 
 
@@ -618,22 +643,20 @@ class GitHubImportView(APIView):
         account = getattr(request.user, "github_account", None)
         if account is None:
             raise ValidationError({"detail": "Connect your GitHub account first."})
-        if GitHubRepositoryLink.objects.filter(github_repo_id=data["github_repo_id"]).exists():
-            raise ValidationError({"detail": "This repository is already linked to another project."})
-
         # Everything that talks to GitHub and can fail is read first, so a failure leaves nothing behind.
+        repo = _verified_repo(account, data["github_repo_id"], data["full_name"])
+        if GitHubRepositoryLink.objects.filter(github_repo_id=repo["id"]).exists():
+            raise ValidationError({"detail": "This repository is already linked to another project."})
+        full_name = repo["full_name"]
         try:
-            repo = services.get_repo(account.access_token, data["full_name"])
-            github_issues = (
-                services.list_repo_issues(account.access_token, data["full_name"]) if data["import_issues"] else []
-            )
+            github_issues = services.list_repo_issues(account.access_token, full_name) if data["import_issues"] else []
         except services.GitHubAPIError as exc:
             raise ValidationError({"detail": str(exc)})
 
         with transaction.atomic():
             project = Project.objects.create(
                 workspace=workspace,
-                name=(repo.get("name") or data["full_name"].split("/")[-1])[:150],
+                name=(repo.get("name") or full_name.split("/")[-1])[:150],
                 description=repo.get("description") or "",
                 status=Project.Status.ACTIVE,
                 owner=request.user,
@@ -642,7 +665,7 @@ class GitHubImportView(APIView):
             ProjectMember.objects.create(project=project, user=request.user, role="owner")
             imported = _import_issues(project, request.user, workspace, github_issues)
 
-        link, warning = _link_repository(project, request.user, account, data["github_repo_id"], data["full_name"])
+        link, warning = _link_repository(project, request.user, account, repo["id"], full_name)
         return Response(
             {
                 "project": {"id": project.id, "name": project.name},

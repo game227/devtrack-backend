@@ -5,6 +5,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.throttling import MemberAddRateThrottle
+
 from .models import Membership, Workspace
 from .permissions import IsWorkspaceAdminOrOwner, IsWorkspaceMember, IsWorkspaceOwner
 from .serializers import MembershipCreateSerializer, MembershipSerializer, WorkspaceSerializer
@@ -43,6 +45,10 @@ class WorkspaceMembersView(generics.ListCreateAPIView):
         if self.request.method == "POST":
             return [IsAuthenticated(), IsWorkspaceAdminOrOwner()]
         return [IsAuthenticated(), IsWorkspaceMember()]
+
+    def get_throttles(self):
+        throttles = super().get_throttles()
+        return throttles + [MemberAddRateThrottle()] if self.request.method == "POST" else throttles
 
     def get_workspace(self):
         workspace = get_object_or_404(Workspace, pk=self.kwargs["pk"])

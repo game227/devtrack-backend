@@ -1,10 +1,13 @@
+# Local, production-like stack: PostgreSQL + the backend image.
+#   export SECRET_KEY=$(openssl rand -hex 32)
+#   docker compose up --build
 services:
   db:
     image: postgres:18-alpine
     environment:
       POSTGRES_DB: devtrack
       POSTGRES_USER: devtrack
-      POSTGRES_PASSWORD: devtrack
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devtrack}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -12,24 +15,38 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    # Deliberately no published port: only the backend container can reach the database.
 
   backend:
     build: .
     command: sh -c "python manage.py migrate && gunicorn config.wsgi:application --bind 0.0.0.0:8000"
     environment:
-      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      # No default: a guessable signing key is worse than refusing to start.
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY first, e.g. export SECRET_KEY=$(openssl rand -hex 32)}
       DEBUG: "False"
-      ALLOWED_HOSTS: "*"
-      DATABASE_URL: postgres://devtrack:devtrack@db:5432/devtrack
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      DATABASE_URL: postgres://devtrack:${POSTGRES_PASSWORD:-devtrack}@db:5432/devtrack
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
       DJANGO_SETTINGS_MODULE: config.settings.prod
+      # This compose file serves plain HTTP on localhost, so the HTTPS redirect and secure-only cookies
+      # that production relies on would make it unusable. Never set this to "False" on a real deployment.
+      SECURE_SSL_REDIRECT: "False"
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"   # reachable from this machine only
     volumes:
       - media_data:/app/media
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:          # just what the entrypoint needs to hand the media volume to the app user and drop root
+      - CHOWN
+      - SETUID
+      - SETGID
 
 volumes:
   postgres_data:

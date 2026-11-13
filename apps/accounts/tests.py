@@ -115,7 +115,7 @@ class AccountLoginThrottleTests(TestCase):
     def test_a_different_account_is_not_affected_by_another_accounts_throttling(self):
         for _ in range(3):
             self.client.post(self.url, {"username": "throttle_user", "password": "wrong"}, format="json")
-        other = User.objects.create_user(username="other_user", email="other@example.com", password="pw")
+        User.objects.create_user(username="other_user", email="other@example.com", password="pw")
         response = self.client.post(self.url, {"username": "other_user", "password": "pw"}, format="json")
         self.assertEqual(response.status_code, 200)
 

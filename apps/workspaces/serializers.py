@@ -55,7 +55,7 @@ class MembershipCreateSerializer(serializers.Serializer):
 
     def validate_username(self, value):
         try:
-            self._user = User.objects.get(username=value)
+            self._user = User.objects.get(username=value, is_active=True)
         except User.DoesNotExist:
             raise serializers.ValidationError("No user with that username exists.")
         return value

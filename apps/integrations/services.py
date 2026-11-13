@@ -5,7 +5,7 @@ from django.conf import settings
 
 GITHUB_API_BASE = "https://api.github.com"
 GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
-GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"  # noqa: S105 — a URL, not a credential
 REQUEST_TIMEOUT = 10
 
 
@@ -133,7 +133,8 @@ def _github_message(response):
 def is_public_url(url):
     """GitHub cannot deliver webhooks to localhost / private hosts."""
     host = (urlparse(url).hostname or "").lower()
-    return bool(host) and host not in ("localhost", "127.0.0.1", "0.0.0.0", "::1") and not host.endswith(".local")
+    local_hosts = ("localhost", "127.0.0.1", "0.0.0.0", "::1")  # noqa: S104 — classifying hosts, not binding
+    return bool(host) and host not in local_hosts and not host.endswith(".local")
 
 
 def get_repo(access_token, full_name):

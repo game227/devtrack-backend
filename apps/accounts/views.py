@@ -14,7 +14,6 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
-from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -26,8 +25,6 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from apps.telegram_bot import services as telegram_services
 
 from .messages import email_verification_message, password_reset_message
-from .throttling import AccountLoginRateThrottle, EmailVerifyResendThrottle
-from .tokens import email_verification_token
 from .serializers import (
     AccountDeleteSerializer,
     EmailVerificationConfirmSerializer,
@@ -38,6 +35,14 @@ from .serializers import (
     RegisterSerializer,
     UserSerializer,
 )
+from .sessions import revoke_all_sessions
+from .throttling import (
+    AccountLoginRateThrottle,
+    EmailVerifyResendThrottle,
+    PasswordResetEmailThrottle,
+    RegisterRateThrottle,
+)
+from .tokens import email_verification_token
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -98,7 +103,7 @@ def _lang_from_request(request):
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [AllowAny]
-    throttle_classes = [AnonRateThrottle]
+    throttle_classes = [AnonRateThrottle, RegisterRateThrottle]
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -176,8 +181,18 @@ class PasswordChangeView(APIView):
     def post(self, request):
         serializer = PasswordChangeSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response({"detail": "Password changed successfully."})
+        user = serializer.save()
+        # Every other session ends with the old password (a stolen refresh token must not outlive it);
+        # this one continues on a fresh pair, returned so the client can swap its stored tokens.
+        revoke_all_sessions(user)
+        refresh = RefreshToken.for_user(user)
+        return Response(
+            {
+                "detail": "Password changed successfully.",
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+            }
+        )
 
 
 class AccountDeleteView(APIView):
@@ -188,8 +203,7 @@ class AccountDeleteView(APIView):
         serializer.is_valid(raise_exception=True)
         user = request.user
 
-        for token in OutstandingToken.objects.filter(user=user):
-            BlacklistedToken.objects.get_or_create(token=token)
+        revoke_all_sessions(user)
 
         # Deactivate and scrub PII instead of a hard delete: this user may be
         # the FK target (author, reporter, assignee) across workspaces other
@@ -209,7 +223,7 @@ class AccountDeleteView(APIView):
 
 class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
-    throttle_classes = [AnonRateThrottle]
+    throttle_classes = [AnonRateThrottle, PasswordResetEmailThrottle]
 
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
@@ -240,5 +254,7 @@ class PasswordResetConfirmView(APIView):
     def post(self, request):
         serializer = PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        user = serializer.save()
+        # Resetting a password usually means "someone else may have it": end every existing session.
+        revoke_all_sessions(user)
         return Response({"detail": "Password has been reset successfully."})

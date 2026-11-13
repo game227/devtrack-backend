@@ -14,4 +14,6 @@ class IssueFilter(django_filters.FilterSet):
     def filter_assignee(self, queryset, name, value):
         if value == "me":
             return queryset.filter(assignee=self.request.user)
-        return queryset.filter(assignee_id=value)
+        if not (value.isascii() and value.isdigit()) or int(value) > 2**63 - 1:
+            return queryset.none()
+        return queryset.filter(assignee_id=int(value))

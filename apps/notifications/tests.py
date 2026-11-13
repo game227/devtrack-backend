@@ -24,6 +24,7 @@ class NotificationSignalTests(TestCase):
         )
         self.workspace = Workspace.objects.create(name="NWS", owner=self.reporter)
         Membership.objects.create(workspace=self.workspace, user=self.reporter, role=Membership.Role.OWNER)
+        Membership.objects.create(workspace=self.workspace, user=self.assignee, role=Membership.Role.MEMBER)
         self.project = Project.objects.create(workspace=self.workspace, name="P", owner=self.reporter)
 
     def test_assigning_an_issue_notifies_the_assignee(self):
@@ -82,6 +83,7 @@ class NotificationSignalTests(TestCase):
 
     def test_being_added_to_a_project_notifies_the_new_member(self):
         newcomer = User.objects.create_user(username="pncomer", email="pncomer@example.com", password="pw")
+        Membership.objects.create(workspace=self.workspace, user=newcomer, role=Membership.Role.MEMBER)
         ProjectMember.objects.create(project=self.project, user=newcomer, role="member")
         self.assertTrue(
             Notification.objects.filter(recipient=newcomer, verb="project_member_added").exists()
@@ -135,7 +137,7 @@ class NotificationActorTests(TestCase):
         # _actor models "whoever performed the change" in general (the GitHub PR-merge handler
         # sets it to a resolved GitHub author, for instance) — exercised directly at the model
         # layer since the issue-detail API itself now only lets the reporter make this change
-        # (IsIssueReporter), so `other` reassigning it could no longer happen through the view.
+        # (CanEditIssue), so `other` reassigning it could no longer happen through the view.
         issue.assignee = reporter
         issue._actor = other
         issue.save()

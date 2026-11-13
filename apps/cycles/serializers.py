@@ -26,7 +26,8 @@ class CycleSerializer(serializers.ModelSerializer):
             "is_active",
             "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        # Which project a cycle/milestone belongs to is fixed at creation (the view sets it).
+        read_only_fields = ["id", "project", "created_at"]
 
     def get_issue_count(self, obj):
         return obj.issues.count()

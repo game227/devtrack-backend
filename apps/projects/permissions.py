@@ -1,7 +1,7 @@
 from rest_framework.permissions import BasePermission
 
-from apps.workspaces.permissions import get_membership
 from apps.workspaces.models import Membership
+from apps.workspaces.permissions import get_membership
 
 
 class IsProjectWorkspaceMember(BasePermission):
@@ -17,10 +17,11 @@ class CanManageProject(BasePermission):
 
     def has_object_permission(self, request, view, obj):
         project = obj
+        # Current workspace membership comes first: a project's owner who has since been removed from
+        # the workspace must not keep managing it.
+        membership = get_membership(request.user, project.workspace)
+        if membership is None:
+            return False
         if project.owner_id == request.user.id:
             return True
-        membership = get_membership(request.user, project.workspace)
-        return membership is not None and membership.role in (
-            Membership.Role.OWNER,
-            Membership.Role.ADMIN,
-        )
+        return membership.role in (Membership.Role.OWNER, Membership.Role.ADMIN)

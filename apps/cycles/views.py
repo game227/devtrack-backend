@@ -3,6 +3,7 @@ from rest_framework import generics
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 
+from apps.common.lookup import body_value, parse_id
 from apps.projects.models import Project
 from apps.workspaces.permissions import get_membership
 
@@ -18,13 +19,13 @@ class CycleListCreateView(generics.ListCreateAPIView):
         project_id = self.request.query_params.get("project")
         if not project_id:
             raise ValidationError({"project": "This query parameter is required."})
-        project = get_object_or_404(Project, pk=project_id)
+        project = get_object_or_404(Project, pk=parse_id(project_id, "project"))
         if get_membership(self.request.user, project.workspace) is None:
             raise PermissionDenied("You are not a member of this project's workspace.")
         return Cycle.objects.filter(project=project)
 
     def perform_create(self, serializer):
-        project = get_object_or_404(Project, pk=self.request.data.get("project"))
+        project = get_object_or_404(Project, pk=parse_id(body_value(self.request, "project"), "project"))
         if get_membership(self.request.user, project.workspace) is None:
             raise PermissionDenied("You are not a member of this project's workspace.")
         serializer.save(project=project)

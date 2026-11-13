@@ -15,6 +15,9 @@ class Workspace(models.Model):
     is_personal = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    def __str__(self):
+        return self.name
+
     def save(self, *args, **kwargs):
         if not self.slug:
             base = slugify(self.name) or "workspace"
@@ -23,9 +26,6 @@ class Workspace(models.Model):
                 slug = f"{base}-{uuid.uuid4().hex[:6]}"
             self.slug = slug
         super().save(*args, **kwargs)
-
-    def __str__(self):
-        return self.name
 
 
 class Membership(models.Model):

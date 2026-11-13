@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
+from apps.teams.models import Team
 from apps.workspaces.serializers import UserBriefSerializer
 
 from .models import Label, Note, Project, ProjectMember
@@ -30,7 +31,18 @@ class ProjectSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "owner", "created_at", "updated_at"]
+        # The workspace is fixed when the project is created (the view passes it in) and never changes:
+        # letting it be patched would let a project owner drop a project into anyone's workspace.
+        read_only_fields = ["id", "workspace", "owner", "created_at", "updated_at"]
+
+    def get_fields(self):
+        fields = super().get_fields()
+        # A project can only be assigned to a team of its own workspace.
+        workspace = self.instance.workspace if getattr(self.instance, "workspace", None) else self.context.get("workspace")
+        fields["team"].queryset = (
+            Team.objects.filter(workspace=workspace) if workspace is not None else Team.objects.none()
+        )
+        return fields
 
 
 class ProjectMemberSerializer(serializers.ModelSerializer):
@@ -48,10 +60,14 @@ class ProjectMemberCreateSerializer(serializers.Serializer):
     specialty = serializers.ChoiceField(choices=ProjectMember.Specialty.choices, required=False, allow_blank=True, default="")
 
     def validate_username(self, value):
-        try:
-            self._user = User.objects.get(username=value)
-        except User.DoesNotExist:
-            raise serializers.ValidationError("No user with that username exists.")
+        # Only people who are already in the project's workspace can be added to the project — the
+        # lookup is scoped, so this endpoint cannot be used to probe which usernames exist elsewhere.
+        project = self.context["project"]
+        self._user = User.objects.filter(
+            username=value, is_active=True, workspace_memberships__workspace_id=project.workspace_id
+        ).first()
+        if self._user is None:
+            raise serializers.ValidationError("No member of this workspace has that username.")
         return value
 
     def validate(self, attrs):
@@ -76,10 +92,24 @@ class ProjectMemberUpdateSerializer(serializers.Serializer):
 
 
 class LabelSerializer(serializers.ModelSerializer):
+    color = serializers.RegexField(
+        r"^#[0-9a-fA-F]{6}$", max_length=7, required=False, error_messages={"invalid": "Use a #rrggbb colour."}
+    )
+
     class Meta:
         model = Label
         fields = ["id", "workspace", "project", "name", "color"]
-        read_only_fields = ["id"]
+        # Fixed at creation (the view passes the workspace in); a label can never be moved to another workspace.
+        read_only_fields = ["id", "workspace"]
+
+    def get_fields(self):
+        fields = super().get_fields()
+        workspace = self.instance.workspace if getattr(self.instance, "workspace", None) else self.context.get("workspace")
+        # A label can be scoped to a project, but only to one in its own workspace.
+        fields["project"].queryset = (
+            Project.objects.filter(workspace=workspace) if workspace is not None else Project.objects.none()
+        )
+        return fields
 
 
 class NoteSerializer(serializers.ModelSerializer):

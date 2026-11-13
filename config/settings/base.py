@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "django_filters",
+    "apps.common",
     "apps.accounts",
     "apps.workspaces",
     "apps.projects",
@@ -51,6 +52,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "apps.common.middleware.ApiResponseHeadersMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -78,6 +80,17 @@ DATABASES = {
 
 AUTH_USER_MODEL = "accounts.User"
 
+# Argon2 first: memory-hard, so offline cracking of a leaked database is far more expensive than with
+# PBKDF2. Existing PBKDF2 hashes keep working and are upgraded transparently on the user's next login.
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
+]
+
+# Password-reset and email-verification links expire after a day (Django's default is three).
+PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -95,6 +108,25 @@ MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Throttle counters live in the cache. The default is per-process memory, which is right for a single
+# gunicorn worker; with several workers or instances point CACHE_URL at a shared backend
+# (e.g. ``dbcache://django_cache`` after ``manage.py createcachetable``, or a Redis URL).
+CACHES = {"default": environ.Env.cache_url_config(env("CACHE_URL", default="").strip() or "locmemcache://")}
+
+# The Django admin lives under this path. Moving it off the guessable default keeps scanners and
+# credential-stuffing bots away from the login form; set ADMIN_URL=some-long-random-path/ in production.
+# An empty value (e.g. a dashboard variable created but left blank) falls back to the default instead of
+# mounting the admin at the site root.
+ADMIN_URL = (env("ADMIN_URL", default="").strip().strip("/") or "admin") + "/"
+
+# Largest multipart request accepted (avatars are the only uploads). Enforced before the body is read.
+MAX_UPLOAD_BYTES = int(env("MAX_UPLOAD_BYTES", default="").strip() or 3 * 1024 * 1024)
+FILE_UPLOAD_HANDLERS = [
+    "apps.common.uploads.MaxRequestSizeUploadHandler",
+    "django.core.files.uploadhandler.MemoryFileUploadHandler",
+    "django.core.files.uploadhandler.TemporaryFileUploadHandler",
+]
 
 # Deliver password-reset links on a background thread so the request returns
 # immediately (and timing does not reveal whether an account exists). Production turns
@@ -142,6 +174,9 @@ GITHUB_WEBHOOK_CALLBACK_URL = env(
     "GITHUB_WEBHOOK_CALLBACK_URL", default="http://localhost:8000/api/v1/integrations/github/webhook/"
 )
 
+# Blank means "not configured" (DRF's default); 0 is meaningful (ignore X-Forwarded-For entirely).
+_NUM_PROXIES = env("NUM_PROXIES", default="").strip()
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -158,6 +193,10 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": (
         "rest_framework.throttling.UserRateThrottle",
     ),
+    # How many reverse proxies sit in front of the app. DRF uses it to read the client address from
+    # X-Forwarded-For; left unset it trusts the *whole* header, which a client can forge to dodge the
+    # per-IP limits. Set it to the real number of proxies (see the README, "Deploying").
+    "NUM_PROXIES": int(_NUM_PROXIES) if _NUM_PROXIES else None,
     "DEFAULT_THROTTLE_RATES": {
         "anon": "20/min",
         # Generous safety net for authenticated traffic — not meant to affect
@@ -167,11 +206,17 @@ REST_FRAMEWORK = {
         "user": "600/min",
         "login_account": "10/min",
         "email_verify_resend": "3/min",
+        # Per-target limits do not depend on the caller's IP, so they hold even when the IP is spoofed.
+        "password_reset_email": "3/hour",
+        "register": "10/hour",
+        "member_add": "60/hour",
+        "github_sync": "10/min",
     },
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    # Short-lived: an access token cannot be revoked, so a stolen one is only useful for this long.
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=14),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,

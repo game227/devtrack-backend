@@ -6,6 +6,7 @@ from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from .avatars import clean_avatar
 from .tokens import email_verification_token
 
 User = get_user_model()
@@ -28,6 +29,10 @@ class UserSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "username", "email", "email_verified", "date_joined"]
 
+    def validate_avatar(self, upload):
+        # None clears the avatar; anything else is checked and replaced by a clean re-encoded copy.
+        return clean_avatar(upload) if upload else upload
+
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True)
@@ -36,6 +41,24 @@ class RegisterSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ["username", "email", "password", "password_confirm", "first_name", "last_name"]
+        extra_kwargs = {"email": {"required": True, "allow_blank": False}}
+
+    def validate_username(self, value):
+        if not value.isascii():
+            # Look-alike letters from other scripts (a Cyrillic "а" for a Latin "a") would let someone
+            # register a name that reads exactly like a teammate's. Existing accounts are unaffected.
+            raise serializers.ValidationError("Usernames may only use English letters, digits and @/./+/-/_.")
+        # Django's username is case-sensitive, so "Admin" and "admin" would be two accounts. In an app
+        # where people @mention each other that is an impersonation trick: compare case-insensitively.
+        if User.objects.filter(username__iexact=value).exists():
+            raise serializers.ValidationError("A user with that username already exists.")
+        return value
+
+    def validate_email(self, value):
+        value = value.strip().lower()
+        if User.objects.filter(email__iexact=value).exists():
+            raise serializers.ValidationError("A user with that email already exists.")
+        return value
 
     def validate(self, attrs):
         if attrs["password"] != attrs.pop("password_confirm"):

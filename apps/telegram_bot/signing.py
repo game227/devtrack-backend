@@ -9,6 +9,10 @@ import time
 
 
 def sign_user_id(user_id, secret):
+    # An empty secret would make every token forgeable by anyone: they could link their own chat to any
+    # account, and password-reset links are delivered to the linked chat.
+    if not secret:
+        raise ValueError("TELEGRAM_LINK_SECRET is not configured.")
     payload = f"{user_id}:{int(time.time())}"
     payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
     sig = hmac.new(secret.encode(), payload_b64.encode(), hashlib.sha256).hexdigest()

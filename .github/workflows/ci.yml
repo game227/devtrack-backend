@@ -5,6 +5,9 @@ on:
     branches: [master, main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -19,7 +22,7 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      SECRET_KEY: ci-only-not-a-secret
+      SECRET_KEY: ci-only-not-a-secret-but-long-enough-0123456789
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/devtrack
     steps:
       - uses: actions/checkout@v4
@@ -27,13 +30,31 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-      - run: pip install -r requirements.txt
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements-dev.txt
       - name: Generate a throwaway encryption key
         run: echo "FIELD_ENCRYPTION_KEY=$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" >> "$GITHUB_ENV"
+      - name: Lint (includes flake8-bandit security rules)
+        run: ruff check .
       - run: python manage.py check
+      - name: Deployment checks against the production settings (fails on a missing or weak secret)
+        run: python manage.py check --deploy --fail-level ERROR
+        env:
+          DJANGO_SETTINGS_MODULE: config.settings.prod
+          ALLOWED_HOSTS: example.com
+          # The same shape as production: a long random key and every secret set.
+          SECRET_KEY: ci-deploy-check-key-0123456789-abcdefghijklmnopqrstuvwxyz
+          TELEGRAM_BOT_USERNAME: ci_bot
+          TELEGRAM_LINK_SECRET: ci-link-secret
+          BOT_SERVICE_API_KEY: ci-bot-key
+          GITHUB_CLIENT_ID: ci-client-id
+          GITHUB_WEBHOOK_SECRET: ci-webhook-secret
       - name: Fail if a model change has no migration
         run: python manage.py makemigrations --check --dry-run
-      - run: python manage.py test --noinput
+      - name: Tests with a coverage floor (see .coveragerc)
+        run: |
+          coverage run manage.py test --noinput
+          coverage report
 
   audit:
     runs-on: ubuntu-latest

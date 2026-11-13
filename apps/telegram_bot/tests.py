@@ -26,6 +26,19 @@ class TelegramConnectViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data["deep_link"].startswith("https://t.me/gamma_v_bot?start="))
 
+    @override_settings(TELEGRAM_LINK_SECRET="")
+    def test_no_link_is_minted_without_a_secret(self):
+        # An empty secret would make the signature forgeable: anyone could link their chat to any account.
+        response = self.client.get(reverse("telegram-connect"))
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("deep_link", response.data)
+
+    def test_signing_refuses_an_empty_secret(self):
+        from .signing import sign_user_id
+
+        with self.assertRaises(ValueError):
+            sign_user_id(1, "")
+
 
 class TelegramStatusViewTests(TestCase):
     def setUp(self):

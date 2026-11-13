@@ -1,0 +1,17 @@
+[run]
+source = apps, config
+omit =
+    */migrations/*
+    */tests.py
+    */test_*.py
+    config/settings/test.py
+    config/asgi.py
+    config/wsgi.py
+
+[report]
+show_missing = False
+fail_under = 90
+skip_empty = True
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:

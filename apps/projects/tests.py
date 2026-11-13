@@ -212,6 +212,7 @@ class ProjectMemberSpecialtyTests(TestCase):
     def test_each_specialty_can_be_assigned_when_adding_a_member(self):
         for value in ("frontend", "backend", "debugger", "designer"):
             user = User.objects.create_user(username=f"sp_{value}", email=f"sp_{value}@example.com", password="pw")
+            Membership.objects.create(workspace=self.workspace, user=user, role=Membership.Role.MEMBER)
             response = self.client.post(self.list_url, {"username": user.username, "specialty": value}, format="json")
             self.assertEqual(response.status_code, 201)
             self.assertEqual(response.data["specialty"], value)
@@ -220,6 +221,7 @@ class ProjectMemberSpecialtyTests(TestCase):
         ok = self.client.post(self.list_url, {"username": "spdev"}, format="json")
         self.assertEqual((ok.status_code, ok.data["specialty"]), (201, ""))
         other = User.objects.create_user(username="spx", email="spx@example.com", password="pw")
+        Membership.objects.create(workspace=self.workspace, user=other, role=Membership.Role.MEMBER)
         bad = self.client.post(self.list_url, {"username": "spx", "specialty": "wizard"}, format="json")
         self.assertEqual(bad.status_code, 400)
         self.assertFalse(ProjectMember.objects.filter(user=other).exists())
