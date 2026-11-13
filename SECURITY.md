@@ -51,9 +51,20 @@ of the workspace the object lives in.
 
 **GitHub**
 
-- OAuth `state` is signed and expires after 5 minutes; access tokens are encrypted at rest (Fernet,
-  rotatable). Webhooks are verified with HMAC-SHA256 and rejected outright if no secret is configured;
-  no webhook is created without one.
+- Connecting is bound to the browser that started it. The OAuth `state` is signed and lasts 5
+  minutes. It carries the hash of a random nonce that only that browser keeps. The callback links
+  nothing: it parks the result, and the SPA claims it with the same user's credentials and that nonce
+  within 10 minutes. A forwarded authorization link therefore never puts the victim's GitHub token on
+  someone else's account; the parked token is discarded and revoked.
+- Access tokens are encrypted at rest (Fernet, rotatable), and are revoked at GitHub on disconnect,
+  on account deletion, on reconnecting as another GitHub user, and when a parked authorization is
+  abandoned. A repository link uses the token of the member who linked it only while they are still an
+  active member; otherwise it uses the requester's own token.
+- Activity from GitHub is credited by GitHub's numeric user id (logins can be renamed and re-registered),
+  and only ever to members of the workspace.
+- Webhooks are verified with HMAC-SHA256 and rejected outright if no secret is configured; no webhook is
+  created without one. GitHub being unreachable or answering garbage is handled as an error, not a 500.
+- Only GitHub's own `access_denied` error code is passed back to the UI; the UI shows known codes only.
 - Linking or importing a repository is checked against GitHub with the caller's own token: the id and
   name in the request must belong to a repository that token can read; GitHub's own name is stored.
 - `#<number>` references only ever match issues of the linked project.

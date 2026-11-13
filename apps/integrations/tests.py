@@ -224,6 +224,7 @@ class WebhookTests(TestCase):
         GitHubAccount.objects.create(
             user=author, github_user_id=999, github_username="octocat", access_token="tok"
         )
+        Membership.objects.create(workspace=self.project.workspace, user=author, role="member")
         self.post_event(
             "pull_request",
             {
@@ -237,7 +238,7 @@ class WebhookTests(TestCase):
                     "state": "closed",
                     "merged": True,
                     "html_url": "https://x/pull/9",
-                    "user": {"login": "octocat"},
+                    "user": {"login": "octocat", "id": 999},
                     "head": {"ref": "fix"},
                     "base": {"ref": "main"},
                 },
@@ -739,8 +740,9 @@ class GitHubWorkflowTests(TestCase):
     def push(self, message="Start on #5", ref="refs/heads/feat"):
         return self.post_event(
             "push",
-            {"ref": ref, "commits": [{"id": "a" * 40, "message": message, "url": "https://x/c/a",
-                                       "timestamp": "2026-09-21T10:30:00+00:00", "author": {"username": "dev-gh", "name": "Dev"}}]},
+            {"ref": ref, "sender": {"login": "dev-gh", "id": 902},
+             "commits": [{"id": "a" * 40, "message": message, "url": "https://x/c/a",
+                          "timestamp": "2026-09-21T10:30:00+00:00", "author": {"username": "dev-gh", "name": "Dev"}}]},
         )
 
     def test_a_commit_mentioning_an_issue_starts_it_and_credits_the_developer(self):
@@ -806,7 +808,7 @@ class GitHubWorkflowTests(TestCase):
 
     def issues_event(self, action, state, number=5, **extra):
         return self.post_event("issues", {"action": action, "issue": {"number": number, "state": state, **extra},
-                                          "sender": {"login": "dev-gh"}})
+                                          "sender": {"login": "dev-gh", "id": 902}})
 
     def test_closing_the_github_issue_finishes_the_devtrack_issue(self):
         self.issues_event("closed", "closed")

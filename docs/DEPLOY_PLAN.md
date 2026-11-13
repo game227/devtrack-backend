@@ -18,6 +18,14 @@
    Merge or rename any rows these return before deploying.
 3. Confirm `FIELD_ENCRYPTION_KEY` is set on the web service. Two-factor secrets are now encrypted with it,
    as well as GitHub tokens.
+4. **GitHub OAuth app.**
+   - The client secret was shared in a chat on 2026-11-13. Generate a new client secret before
+     production use, and keep it only in the Render environment (`GITHUB_CLIENT_SECRET`).
+   - An OAuth app has a single callback URL, so use one app for local development (callback
+     `http://localhost:8000/api/v1/integrations/github/callback/`) and another for production (callback
+     = `GITHUB_CALLBACK_URL` in `render.yaml`).
+   - `GITHUB_WEBHOOK_SECRET` must be set too: `check --deploy` fails without it once
+     `GITHUB_CLIENT_ID` is set.
 
 ## 2. Order
 
@@ -25,7 +33,9 @@
    branch with the same name, so its end-to-end job tests the pair together.
 2. When both CIs are green, merge the **backend** into `master` first. Render deploys it, and the
    `preDeployCommand` runs the migrations below. Then merge the **frontend**.
-   - An older frontend keeps working against the new backend.
+   - An older frontend keeps working against the new backend, except "Connect GitHub". The backend now
+     requires the browser nonce, so connecting fails until the frontend is deployed. Deploy the two close
+     together.
    - The new frontend's board needs the new `exclude_status`/`completed_at` API. Do not ship the
      frontend first.
 

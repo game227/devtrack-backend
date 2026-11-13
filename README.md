@@ -67,7 +67,10 @@ rule-based project health (with structured, localizable risks), developer analyt
 ## GitHub: connect, import, link
 
 1. **Connect** (Settings → GitHub): needs a GitHub OAuth App whose *Authorization callback URL* is exactly
-   `GITHUB_CALLBACK_URL` (locally `http://localhost:8000/api/v1/integrations/github/callback/`).
+   `GITHUB_CALLBACK_URL` (locally `http://localhost:8000/api/v1/integrations/github/callback/`; use separate
+   apps for development and production). The flow is bound to the browser that starts it (a nonce it
+   keeps), and the callback only parks the result until that browser claims it via
+   `POST /integrations/github/complete/`. Disconnecting revokes the token at GitHub.
 2. **Import a repository as a project** (Projects → Import from GitHub): creates the project, links the
    repo and imports its issues (up to 300, pull requests excluded). Imported issues keep GitHub's numbers, so
    `#12` in a commit or pull request means GitHub's issue 12 in such a project; issues created in DevTrack

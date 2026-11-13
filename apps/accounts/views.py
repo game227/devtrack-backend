@@ -213,6 +213,10 @@ class AccountDeleteView(APIView):
         user = request.user
 
         revoke_all_sessions(user)
+        # Their GitHub token must not outlive the account (it was used to read their repositories).
+        from apps.integrations.views import disconnect_github
+
+        disconnect_github(user)
 
         # Deactivate and scrub PII instead of a hard delete: this user may be
         # the FK target (author, reporter, assignee) across workspaces other

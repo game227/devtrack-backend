@@ -1,3 +1,4 @@
+import functools
 from urllib.parse import urlencode, urlparse
 
 import requests
@@ -11,6 +12,22 @@ REQUEST_TIMEOUT = 10
 
 class GitHubAPIError(Exception):
     """Raised whenever a call to the GitHub API fails or returns an error payload."""
+
+
+def _github_call(func):
+    """GitHub being unreachable, slow or answering with a non-JSON outage page is a GitHubAPIError like
+    any other failure, so every caller's existing handling applies (instead of a 500)."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except requests.RequestException as exc:
+            raise GitHubAPIError("GitHub could not be reached. Try again in a moment.") from exc
+        except ValueError as exc:
+            raise GitHubAPIError("GitHub sent an unexpected answer.") from exc
+
+    return wrapper
 
 
 def _headers(access_token=None):
@@ -33,6 +50,7 @@ def build_authorize_url(state):
     return f"{GITHUB_AUTHORIZE_URL}?{urlencode(params)}"
 
 
+@_github_call
 def exchange_code_for_token(code):
     response = requests.post(
         GITHUB_TOKEN_URL,
@@ -51,6 +69,7 @@ def exchange_code_for_token(code):
     return data
 
 
+@_github_call
 def fetch_github_user(access_token):
     response = requests.get(f"{GITHUB_API_BASE}/user", headers=_headers(access_token), timeout=REQUEST_TIMEOUT)
     if response.status_code != 200:
@@ -61,6 +80,7 @@ def fetch_github_user(access_token):
 MAX_REPO_PAGES = 10  # safety cap: 10 * 100 = up to 1000 repos considered
 
 
+@_github_call
 def list_user_repos(access_token):
     repos = []
     for page in range(1, MAX_REPO_PAGES + 1):
@@ -90,6 +110,7 @@ def list_user_repos(access_token):
     ]
 
 
+@_github_call
 def create_webhook(access_token, full_name, callback_url, secret):
     response = requests.post(
         f"{GITHUB_API_BASE}/repos/{full_name}/hooks",
@@ -107,6 +128,7 @@ def create_webhook(access_token, full_name, callback_url, secret):
     return response.json()
 
 
+@_github_call
 def delete_webhook(access_token, full_name, webhook_id):
     if not webhook_id:
         return
@@ -137,6 +159,7 @@ def is_public_url(url):
     return bool(host) and host not in local_hosts and not host.endswith(".local")
 
 
+@_github_call
 def get_repo(access_token, full_name):
     response = requests.get(f"{GITHUB_API_BASE}/repos/{full_name}", headers=_headers(access_token), timeout=REQUEST_TIMEOUT)
     if response.status_code != 200:
@@ -147,6 +170,7 @@ def get_repo(access_token, full_name):
 MAX_IMPORT_ISSUES = 300  # import cap: 3 pages of 100
 
 
+@_github_call
 def list_repo_issues(access_token, full_name):
     """Issues of a repository, oldest first, without pull requests (GitHub lists PRs as issues too)."""
     issues = []
@@ -166,6 +190,7 @@ def list_repo_issues(access_token, full_name):
     return issues
 
 
+@_github_call
 def list_repo_pulls(access_token, full_name, limit=30):
     response = requests.get(
         f"{GITHUB_API_BASE}/repos/{full_name}/pulls",
@@ -178,6 +203,7 @@ def list_repo_pulls(access_token, full_name, limit=30):
     return response.json()
 
 
+@_github_call
 def list_repo_commits(access_token, full_name, limit=30):
     response = requests.get(
         f"{GITHUB_API_BASE}/repos/{full_name}/commits",
@@ -190,6 +216,7 @@ def list_repo_commits(access_token, full_name, limit=30):
     return response.json()
 
 
+@_github_call
 def list_recent_issues(access_token, full_name, limit=30):
     """The most recently updated issues (pull requests excluded): enough to notice closes/reopens."""
     response = requests.get(
@@ -201,3 +228,27 @@ def list_recent_issues(access_token, full_name, limit=30):
     if response.status_code != 200:
         raise GitHubAPIError(f"Could not read the repository's issues: {_github_message(response)}")
     return [item for item in response.json() if "pull_request" not in item]
+
+
+@_github_call
+def revoke_token(access_token):
+    """Ask GitHub to invalidate a token we no longer keep (disconnect, deleted account, abandoned or
+    hijacked connection), so a copy that leaked somewhere stops working too. Best effort."""
+    if not (access_token and settings.GITHUB_CLIENT_ID and settings.GITHUB_CLIENT_SECRET):
+        return
+    response = requests.delete(
+        f"{GITHUB_API_BASE}/applications/{settings.GITHUB_CLIENT_ID}/token",
+        auth=(settings.GITHUB_CLIENT_ID, settings.GITHUB_CLIENT_SECRET),
+        headers=_headers(),
+        json={"access_token": access_token},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if response.status_code not in (204, 404, 422):
+        raise GitHubAPIError("GitHub did not revoke the token.")
+
+
+def revoke_quietly(access_token):
+    try:
+        revoke_token(access_token)
+    except GitHubAPIError:
+        pass  # our copy is deleted either way; GitHub keeps listing the grant until the user removes it
