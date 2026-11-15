@@ -144,15 +144,16 @@ services:
     # script-src allows the one inline script (the pre-paint theme script in index.html) by its
     # SHA-256 hash instead of 'unsafe-inline', so an injected inline script cannot run. The hash only
     # matches those exact bytes: the frontend's CI runs `npm run check:csp` and fails if index.html
-    # changes without this value being updated. Everything else is locked to the app's own origin,
-    # the backend API, and Google Fonts. (style-src keeps 'unsafe-inline': React sets inline styles.)
+    # changes without this value being updated. Everything else is locked to the app's own origin and
+    # the backend API; the fonts are bundled with the app, so no third-party font host is allowed.
+    # (style-src keeps 'unsafe-inline': React sets inline styles.)
     headers:
       - path: /*
         name: Content-Security-Policy
         value: >-
-          default-src 'self'; script-src 'self' 'sha256-7m9d48QF1iYJf66zfapO/vi1jxRJMj/O9Ge0xXRiB24=';
-          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-          font-src 'self' https://fonts.gstatic.com;
+          default-src 'self'; script-src 'self' 'sha256-31UcN5IBkCfFsKN5X2FVneVfbwuTbEp6aeF6qw+pWGA=';
+          style-src 'self' 'unsafe-inline';
+          font-src 'self';
           img-src 'self' data: https://devtrack-backend.onrender.com;
           connect-src 'self' https://devtrack-backend.onrender.com https://*.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io;
           base-uri 'self'; form-action 'self'; object-src 'none'; frame-ancestors 'none'
