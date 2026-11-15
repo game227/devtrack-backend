@@ -22,6 +22,10 @@ class GitHubAccount(models.Model):
     connected_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+
+    class Meta:
+        verbose_name = "GitHub account"
+
     def __str__(self):
         return f"{self.user} -> github:{self.github_username}"
 
@@ -46,6 +50,10 @@ class GitHubPendingConnection(models.Model):
     access_token = EncryptedCharField(max_length=500)
     scope = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+    class Meta:
+        verbose_name = "pending GitHub connection"
 
     def __str__(self):
         return f"pending github:{self.github_username} for {self.user}"
@@ -72,6 +80,10 @@ class GitHubRepositoryLink(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+    class Meta:
+        verbose_name = "GitHub repository link"
 
     def __str__(self):
         return f"{self.project} -> {self.full_name}"
@@ -104,6 +116,7 @@ class GitHubPullRequest(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = "GitHub pull request"
         unique_together = [("repo_link", "github_pr_id")]
         ordering = ["-updated_at"]
 
@@ -125,6 +138,7 @@ class GitHubCommit(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "GitHub commit"
         unique_together = [("repo_link", "sha")]
         ordering = ["-created_at"]
 

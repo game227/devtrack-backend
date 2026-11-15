@@ -53,6 +53,7 @@
 | `workspaces.0003` | Invitations table | additive |
 | `integrations.0004` | Parked GitHub authorizations (OAuth flow bound to the browser) | additive |
 | `live.0001` | Per-workspace change clock for live updates | additive |
+| `activities.0002`, `integrations.0005` | Admin display names only (no schema change) | none |
 
 The data migrations were tested against real data (see `apps/issues/test_numbers.py`) and applied to
 the development database. Several of them add required columns (`issues.number`,
@@ -104,6 +105,7 @@ python manage.py migrate workspaces 0002
 python manage.py migrate accounts 0004
 python manage.py migrate integrations 0003
 python manage.py migrate live zero
+python manage.py migrate activities 0001
 ```
 
 This was rehearsed on a seeded copy: all eight migrations reverse cleanly, and the `master` code then

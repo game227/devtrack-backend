@@ -151,7 +151,7 @@ services:
       - path: /*
         name: Content-Security-Policy
         value: >-
-          default-src 'self'; script-src 'self' 'sha256-31UcN5IBkCfFsKN5X2FVneVfbwuTbEp6aeF6qw+pWGA=';
+          default-src 'self'; script-src 'self' 'sha256-FiBP/F5pflxGDghQbGaiDlNBZ9G3mrZrfGuB29NJ52s=';
           style-src 'self' 'unsafe-inline';
           font-src 'self';
           img-src 'self' data: https://devtrack-backend.onrender.com;

@@ -99,6 +99,17 @@ GITHUB_WEBHOOK_SECRET=<any long random string>
 Creating a webhook also needs admin rights on the repository; without them the repo is still linked and can
 be synced manually.
 
+
+## Django admin
+
+The admin (at `ADMIN_URL`) wears the web app's design: `apps/adminui` overrides the admin's base, sign-in
+and front-page templates and adds `static/devtrack_admin/admin.css` (the app's tokens mapped onto the
+admin's CSS variables, with self-hosted Geist fonts). The front page shows the headline figures and every
+issue on the line, one station per status, each linking to its filtered list. The ModelAdmins show status
+and priority as chips, with filters, search and raw-id inputs; the activity and notification logs are
+read-only, and two-factor secrets and GitHub tokens are never shown. Create the first account with
+`python manage.py createsuperuser`.
+
 ## Configuration
 
 See `.env.example`. Notable settings:

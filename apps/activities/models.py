@@ -20,6 +20,7 @@ class Activity(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        verbose_name_plural = "activities"
         indexes = [models.Index(fields=["workspace", "-created_at"])]
 
     def __str__(self):

@@ -17,6 +17,8 @@ DEBUG = env.bool("DEBUG", default=False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
 INSTALLED_APPS = [
+    # Before django.contrib.admin, so its admin template overrides take precedence.
+    "apps.adminui",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",

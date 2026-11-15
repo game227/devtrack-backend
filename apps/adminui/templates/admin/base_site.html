@@ -1,0 +1,61 @@
+{% extends "admin/base.html" %}
+{% load i18n static %}
+{% comment %}
+  DevTrack's admin chrome: the logo and name in a white top bar, the account tools on the right, and
+  the stylesheet loaded last (in "responsive", after Django's own) so its tokens win.
+{% endcomment %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} · {% endif %}{{ title }} · {{ site_title|default:_('Django site admin') }}{% endblock %}
+
+{% block responsive %}
+  {{ block.super }}
+  <link rel="preload" href="{% static 'devtrack_admin/fonts/geist-latin-wght-normal.woff2' %}" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{% static 'devtrack_admin/admin.css' %}" {% csp_nonce_attr %}>
+  <link rel="icon" type="image/svg+xml" href="{% static 'devtrack_admin/favicon.svg' %}">
+  <meta name="theme-color" content="#cececc" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#151515" media="(prefers-color-scheme: dark)">
+{% endblock %}
+
+{% block branding %}
+<a class="dt-brand" href="{% url 'admin:index' %}">
+  <svg class="dt-logo" width="30" height="13" viewBox="0 0 28 12" aria-hidden="true" focusable="false">
+    <line x1="3" y1="6" x2="24" y2="6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="3.5" cy="6" r="2.5" fill="currentColor"/>
+    <circle cx="13.5" cy="6" r="2.5" fill="currentColor"/>
+    <circle class="dt-logo-end" cx="23" cy="6" r="4.25"/>
+  </svg>
+  <span class="dt-brand-name">{{ site_header|default:_('Django administration') }}</span>
+  <span class="dt-brand-tag">admin</span>
+</a>
+{% if user.is_anonymous %}
+  {% include "admin/color_theme_toggle.html" %}
+{% endif %}
+{% endblock %}
+
+{% block welcome-msg %}
+  <span class="dt-user">
+    <span class="dt-avatar" aria-hidden="true">{{ user.get_username|slice:":2" }}</span>
+    <span class="visually-hidden">{% translate 'Welcome,' %}</span>
+    <strong>{% firstof user.get_short_name user.get_username %}</strong>
+  </span>
+{% endblock %}
+
+{% block userlinks %}
+  {% if site_url %}
+    <a class="dt-toollink" href="{{ site_url }}">{% translate 'View site' %}</a>
+  {% endif %}
+  {% if user.is_active and user.is_staff %}
+    {% url 'django-admindocs-docroot' as docsroot %}
+    {% if docsroot %}<a class="dt-toollink" href="{{ docsroot }}">{% translate 'Documentation' %}</a>{% endif %}
+  {% endif %}
+  {% if user.has_usable_password %}
+    <a class="dt-toollink" href="{% url 'admin:password_change' %}">{% translate 'Change password' %}</a>
+  {% endif %}
+  <form id="logout-form" method="post" action="{% url 'admin:logout' %}">
+    {% csrf_token %}
+    <button type="submit">{% translate 'Log out' %}</button>
+  </form>
+  {% include "admin/color_theme_toggle.html" %}
+{% endblock %}
+
+{% block nav-global %}{% endblock %}
