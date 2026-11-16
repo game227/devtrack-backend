@@ -4,7 +4,7 @@ import threading
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
-from django.core.mail import send_mail
+from django.core.mail import EmailMessage
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from rest_framework import generics, status
@@ -55,6 +55,12 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
+def _send_email(subject, body, to):
+    """Send one plain-text email; replies go to the support address rather than the sending domain."""
+    reply_to = [settings.SUPPORT_EMAIL] if settings.SUPPORT_EMAIL else None
+    EmailMessage(subject=subject, body=body, to=[to], reply_to=reply_to).send(fail_silently=False)
+
+
 def _deliver_password_reset(user_id, email, message):
     """Telegram first (if linked) — email is the fallback, not a second
     delivery, so a reset link is never sent twice. The bot service itself knows
@@ -67,26 +73,14 @@ def _deliver_password_reset(user_id, email, message):
         pass  # not linked, or the bot service call failed — fall back to email
 
     try:
-        send_mail(
-            subject=message["subject"],
-            message=message["email"],
-            from_email=None,
-            recipient_list=[email],
-            fail_silently=False,
-        )
+        _send_email(message["subject"], message["email"], email)
     except Exception:  # noqa: BLE001 — never let delivery problems reach the caller
         logger.exception("Password reset email could not be delivered")
 
 
 def _deliver_email_verification(email, message):
     try:
-        send_mail(
-            subject=message["subject"],
-            message=message["email"],
-            from_email=None,
-            recipient_list=[email],
-            fail_silently=False,
-        )
+        _send_email(message["subject"], message["email"], email)
     except Exception:  # noqa: BLE001 — never let delivery problems reach the caller
         logger.exception("Verification email could not be delivered")
 

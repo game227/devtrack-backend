@@ -140,6 +140,11 @@ PASSWORD_RESET_ASYNC = env.bool("PASSWORD_RESET_ASYNC", default=False)
 # point at the SPA rather than the API.
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 
+# Where people reach the team: shown in the web app, and the Reply-To of every email DevTrack sends. (The
+# From address stays DEFAULT_FROM_EMAIL, on a domain the mail provider has verified; a Gmail address
+# cannot be the sender through Resend, but replies go here.)
+SUPPORT_EMAIL = env("SUPPORT_EMAIL", default="safary12800@gmail.com")
+
 GITHUB_CLIENT_ID = env("GITHUB_CLIENT_ID", default="")
 GITHUB_CLIENT_SECRET = env("GITHUB_CLIENT_SECRET", default="")
 GITHUB_WEBHOOK_SECRET = env("GITHUB_WEBHOOK_SECRET", default="")

@@ -66,6 +66,9 @@ services:
         sync: false
       - key: DEFAULT_FROM_EMAIL
         value: onboarding@resend.dev
+      # Contact address shown in the app; also the Reply-To of every email.
+      - key: SUPPORT_EMAIL
+        value: safary12800@gmail.com
       # Telegram bot service (below): the backend only needs the bot's @username and URL.
       - key: TELEGRAM_BOT_USERNAME
         sync: false

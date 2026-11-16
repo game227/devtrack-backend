@@ -42,6 +42,8 @@ class PasswordResetChannelTests(TestCase):
         self.client.post(self.url, {"email": self.user.email}, format="json")
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.user.email])
+        # Replies reach the team, not the sending domain.
+        self.assertEqual(mail.outbox[0].reply_to, ["safary12800@gmail.com"])
 
     def test_unknown_email_sends_nothing_but_still_returns_200(self):
         response = self.client.post(self.url, {"email": "nobody@example.com"}, format="json")
