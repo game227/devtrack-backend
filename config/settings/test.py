@@ -31,6 +31,7 @@ REST_FRAMEWORK = {
         "github_sync": "100000/min",
         "two_factor": "100000/min",
         "password_check": "100000/min",
+        "issue_export": "100000/hour",
     },
 }
 

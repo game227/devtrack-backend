@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from apps.adminui.display import chip, key
 
-from .models import Issue
+from .models import Issue, SavedView
 
 
 @admin.register(Issue)
@@ -31,3 +31,12 @@ class IssueAdmin(admin.ModelAdmin):
     @admin.display(description="Priority", ordering="priority")
     def priority_chip(self, obj):
         return chip(f"dt-pri-{obj.priority}", obj.get_priority_display())
+
+
+@admin.register(SavedView)
+class SavedViewAdmin(admin.ModelAdmin):
+    list_display = ["name", "owner", "workspace", "project", "created_at"]
+    list_select_related = ["owner", "workspace", "project"]
+    search_fields = ["name", "owner__username"]
+    raw_id_fields = ["owner", "workspace", "project"]
+    readonly_fields = ["created_at"]

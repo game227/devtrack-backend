@@ -95,3 +95,41 @@ def allocate_issue_number(project_id):
     project.issue_counter += 1
     project.save(update_fields=["issue_counter"])
     return project.issue_counter
+
+
+class SavedView(models.Model):
+    """A named set of issue-list filters, private to the person who saved it.
+
+    It belongs to a workspace (the workspace-wide issue list) or to one project (that project's list).
+    `filters` holds only the keys the issue list understands (see `SAVED_VIEW_FILTER_KEYS`).
+    """
+
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="saved_issue_views")
+    workspace = models.ForeignKey("workspaces.Workspace", on_delete=models.CASCADE, related_name="saved_issue_views")
+    project = models.ForeignKey("projects.Project", on_delete=models.CASCADE, null=True, blank=True, related_name="saved_issue_views")
+    name = models.CharField(max_length=60)
+    filters = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name", "id"]
+        # Two constraints, because PostgreSQL treats NULL project ids as distinct: one name per person
+        # for the workspace-wide list, and one per person in each project.
+        constraints = [
+            models.UniqueConstraint(
+                fields=["owner", "workspace", "name"],
+                condition=models.Q(project__isnull=True),
+                name="issues_savedview_unique_workspace_name",
+            ),
+            models.UniqueConstraint(
+                fields=["owner", "project", "name"],
+                condition=models.Q(project__isnull=False),
+                name="issues_savedview_unique_project_name",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+SAVED_VIEW_FILTER_KEYS = ("status", "type", "priority", "assignee", "label")

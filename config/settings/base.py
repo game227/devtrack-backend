@@ -221,6 +221,7 @@ REST_FRAMEWORK = {
         "github_sync": "10/min",
         "two_factor": "10/min",
         "password_check": "10/min",
+        "issue_export": "30/hour",
     },
 }
 
@@ -235,6 +236,8 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS", default=["http://localhost:5173"]
 )
+# The frontend reads the file name of a download (the CSV export) from this header.
+CORS_EXPOSE_HEADERS = ["Content-Disposition"]
 
 # Structured console logging — Render (and most PaaS) collect stdout directly,
 # so there's no file handler to manage. Django's own request logger stays at

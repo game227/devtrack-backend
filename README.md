@@ -64,6 +64,12 @@ rule-based project health (with structured, localizable risks), developer analyt
   members, and the caller's notifications/invitations), never the data itself. The SPA asks every 10 s
   while visible and refetches only those parts (`apps/live`).
 - **Two-factor authentication**: `/auth/2fa/setup|enable|disable/`; sign-in then needs `otp`.
+- **CSV export**: `GET /issues/export/?project=<id>` (or `workspace=<id>`) takes the issue list's filters and
+  `lang` (`en`/`uz`/`ru`) and streams up to 10,000 rows. Cells that a spreadsheet would run as a formula
+  are prefixed with `'`; 30 exports per user per hour (`issue_export`).
+- **Saved views**: `GET|POST /issues/views/?project=<id>|workspace=<id>`, `PATCH|DELETE /issues/views/<id>/`.
+  A named set of list filters (`status`, `type`, `priority`, `assignee`, `label`), private to its owner,
+  up to 30 per list. The SPA keeps the current filters in the URL, so a filtered list can be shared.
 - **Backups**: `manage.py backup_database` (scheduled on Render, see docs/BACKUP.md).
 - **Who can edit an issue**: its creator (everything) and its assignee (status and priority only);
   workspace admins can delete it. Anyone who leaves a workspace loses these rights.
