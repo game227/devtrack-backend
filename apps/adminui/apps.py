@@ -16,8 +16,12 @@ class AdminUIConfig(AppConfig):
         from django.conf import settings
         from django.contrib import admin
 
+        from .forms import DevTrackAdminAuthenticationForm
+
         admin.site.site_header = "DevTrack"
         admin.site.site_title = "DevTrack admin"
         admin.site.index_title = "Overview"
         # "View site" opens the web app, not the API host.
         admin.site.site_url = settings.FRONTEND_URL
+        # Two-factor codes and a cap on failed attempts, like the web app's sign-in.
+        admin.site.login_form = DevTrackAdminAuthenticationForm
