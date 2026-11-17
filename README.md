@@ -63,6 +63,10 @@ rule-based project health (with structured, localizable risks), developer analyt
 - **Live updates**: `GET /changes/?workspace=<id>&since=<cursor>` names what changed (issues, projects,
   members, and the caller's notifications/invitations), never the data itself. The SPA asks every 10 s
   while visible and refetches only those parts (`apps/live`).
+  With an ASGI server, `POST /changes/ticket/` hands out a 60-second single-use ticket that opens
+  `GET /changes/stream/?ticket=` (server-sent events, a check every 2 s, membership rechecked each time,
+  5 minutes per connection). `POST /changes/presence/ {issue}` is a heartbeat that answers who else has
+  the issue open (kept in the cache).
 - **Two-factor authentication**: `/auth/2fa/setup|enable|disable/`; sign-in then needs `otp`.
 - **CSV export**: `GET /issues/export/?project=<id>` (or `workspace=<id>`) takes the issue list's filters and
   `lang` (`en`/`uz`/`ru`) and streams up to 10,000 rows. Cells that a spreadsheet would run as a formula

@@ -142,21 +142,23 @@ This was rehearsed on a seeded copy: all eight migrations reverse cleanly, and t
 creates users and issues normally. Reversing drops the new data: issue numbers, completion times,
 invitations and two-factor settings. If that matters, restore the backup from step 1.1 instead.
 
-## 7. Live updates, stage 2 (planned)
+## 7. Live updates, stage 2 (built, off until ASGI)
 
-Today the SPA asks `/changes/` every 10 s while the tab is visible. To get ~1 s updates:
+The code is in place: `/changes/ticket/` + `/changes/stream/` (`apps/live/stream.py`) and the SPA's
+EventSource client behind `VITE_LIVE_STREAM=true`, falling back to `/changes/` polling whenever the stream
+fails. Presence (`/changes/presence/`) works on today's setup.
 
-1. Serve Django under ASGI (gunicorn with uvicorn workers, or daphne). A long-lived stream would tie up a
-   sync gunicorn worker per open tab.
-2. Add `GET /api/v1/events/` as a server-sent-events stream. A post-commit hook on `touch()` publishes
-   `NOTIFY workspace_<id>, '<area>'`; the stream `LISTEN`s with an async psycopg connection. This is
-   PostgreSQL only, with no Redis.
-3. Authenticate the stream with a single-use, short-lived ticket from an authenticated `POST`, because
-   `EventSource` cannot send an `Authorization` header. Membership is checked when the stream opens and
-   rechecked on every event.
-4. Keep `/changes/` as the fallback while the stream is down, so nothing regresses if it fails.
+To switch the stream on:
 
-Render: the web service's start command changes. Measure memory per open stream before raising the plan.
+1. Serve Django under ASGI: start command
+   `gunicorn config.asgi:application -k uvicorn_worker.UvicornWorker --workers 2 --timeout 0`
+   (add `uvicorn-worker` to requirements). With a sync worker, each open stream would hold a worker.
+2. Point `CACHE_URL` at a shared cache when running more than one worker (tickets are single-use via the
+   cache, and presence lives there).
+3. Build the frontend with `VITE_LIVE_STREAM=true`.
+4. Watch database connections: each stream opens a short connection every 2 s and closes it.
+
+A later step could replace the 2 s check with PostgreSQL `LISTEN/NOTIFY`.
 
 ## 8. Deliberately left for later
 
