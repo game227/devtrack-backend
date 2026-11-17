@@ -14,3 +14,4 @@ whitenoise==6.12.0
 sentry-sdk==2.71.0
 django-storages==1.14.6
 boto3==1.43.104
+pywebpush==2.0.3

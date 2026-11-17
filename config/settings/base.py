@@ -241,6 +241,12 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS", default=["http://localhost:5173"]
 )
+# Web Push (notifications with the app closed). Off until both keys are set: `manage.py generate_vapid_keys`.
+WEB_PUSH_VAPID_PUBLIC_KEY = env("WEB_PUSH_VAPID_PUBLIC_KEY", default="")
+WEB_PUSH_VAPID_PRIVATE_KEY = env("WEB_PUSH_VAPID_PRIVATE_KEY", default="")
+WEB_PUSH_SUBJECT = env("WEB_PUSH_SUBJECT", default=f"mailto:{SUPPORT_EMAIL}")
+WEB_PUSH_ASYNC = env.bool("WEB_PUSH_ASYNC", default=False)
+
 # "Try the demo": throwaway accounts with a sample workspace. Off unless explicitly enabled; when on, run
 # `manage.py cleanup_demo` hourly (expired demos are also swept whenever a new one starts).
 DEMO_ENABLED = env.bool("DEMO_ENABLED", default=False)

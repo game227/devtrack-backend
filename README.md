@@ -88,6 +88,11 @@ rule-based project health (with structured, localizable risks), developer analyt
   invite, use GitHub or Telegram, change email/password/2FA or their profile, or upload files
   (`apps/demo/authentication.py`). They expire after `DEMO_TTL_HOURS` (24); `manage.py cleanup_demo`
   deletes them with everything they own, and at most `DEMO_MAX_ACTIVE` (200) run at once.
+- **Web Push**: `GET /notifications/push/`, `POST /notifications/push/subscribe/|unsubscribe/`. Every in-app
+  notification also goes to the user's subscribed browsers, worded in the language chosen when
+  subscribing. Off until `WEB_PUSH_VAPID_PUBLIC_KEY`/`WEB_PUSH_VAPID_PRIVATE_KEY` are set
+  (`manage.py generate_vapid_keys`); only the browser vendors' push services are accepted as endpoints,
+  and subscriptions the service reports gone are deleted.
 - **Saved views**: `GET|POST /issues/views/?project=<id>|workspace=<id>`, `PATCH|DELETE /issues/views/<id>/`.
   A named set of list filters (`status`, `type`, `priority`, `assignee`, `label`), private to its owner,
   up to 30 per list. The SPA keeps the current filters in the URL, so a filtered list can be shared.

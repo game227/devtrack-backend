@@ -12,6 +12,7 @@ from apps.telegram_bot.notify import push_notification
 from apps.workspaces.models import Invitation, Membership, Workspace
 
 from .models import Notification
+from .webpush import push_to_browsers
 
 User = get_user_model()
 MENTION_RE = re.compile(r"@(\w+)")
@@ -46,6 +47,7 @@ def _notify(recipient, actor, verb, target, require_membership=True):
         return
     notification = Notification.objects.create(recipient=recipient, verb=verb, target=target)
     push_notification(notification, actor)
+    push_to_browsers(notification, actor)
 
 
 def recipient_id_equals_actor(recipient, actor):

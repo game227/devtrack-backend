@@ -58,6 +58,7 @@
 | `issues.0009` | Checklist items and links between issues | additive |
 | `issues.0010` | `estimate` (story points, nullable) | additive |
 | `issues.0011` | Issue attachments (files under `attachments/` in media storage) | additive |
+| `notifications.0002` | Web Push subscriptions | additive |
 | `demo.0001` | Demo account markers (unused while `DEMO_ENABLED` is off) | additive |
 
 The data migrations were tested against real data (see `apps/issues/test_numbers.py`) and applied to
@@ -98,6 +99,13 @@ Check these against the bot before or with the backend deploy:
 - The day after: the backup job's log shows an upload. Rehearse a restore into a scratch database
   (docs/BACKUP.md).
 
+### Web Push (optional)
+
+Run `python manage.py generate_vapid_keys` once and set both printed values on the web service
+(`WEB_PUSH_VAPID_PRIVATE_KEY` is a secret: use the dashboard, never the repo), plus `WEB_PUSH_ASYNC=true`.
+Keep the same pair afterwards: a new key invalidates every browser subscription. The `pywebpush`
+dependency is new in requirements.txt.
+
 ### Demo mode (optional)
 
 Leave `DEMO_ENABLED` unset for the first deploy. To offer "Try the demo" later: set `DEMO_ENABLED=true`
@@ -127,6 +135,7 @@ python manage.py migrate integrations 0003
 python manage.py migrate live zero
 python manage.py migrate activities 0001
 python manage.py migrate demo zero
+python manage.py migrate notifications 0001
 ```
 
 This was rehearsed on a seeded copy: all eight migrations reverse cleanly, and the `master` code then

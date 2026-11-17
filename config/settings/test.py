@@ -16,6 +16,9 @@ PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 PASSWORD_RESET_ASYNC = False
 TELEGRAM_NOTIFICATIONS_ENABLED = False
 TELEGRAM_NOTIFICATIONS_ASYNC = False
+WEB_PUSH_ASYNC = False
+WEB_PUSH_VAPID_PUBLIC_KEY = ""
+WEB_PUSH_VAPID_PRIVATE_KEY = ""
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
 CACHES = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
