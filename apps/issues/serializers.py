@@ -7,7 +7,7 @@ from apps.milestones.models import Milestone
 from apps.projects.models import Label
 from apps.workspaces.serializers import UserBriefSerializer
 
-from .models import SAVED_VIEW_FILTER_KEYS, Issue, SavedView
+from .models import SAVED_VIEW_FILTER_KEYS, ChecklistItem, Issue, IssueRelation, SavedView
 
 User = get_user_model()
 
@@ -31,6 +31,7 @@ class IssueSerializer(serializers.ModelSerializer):
     assignee = UserBriefSerializer(read_only=True)
     reporter = UserBriefSerializer(read_only=True)
     labels = LabelBriefSerializer(many=True, read_only=True)
+    checklist = serializers.SerializerMethodField()
     assignee_id = serializers.PrimaryKeyRelatedField(
         source="assignee", queryset=User.objects.none(), write_only=True, required=False, allow_null=True
     )
@@ -44,6 +45,7 @@ class IssueSerializer(serializers.ModelSerializer):
             "id",
             "project",
             "number",
+            "checklist",
             "title",
             "description",
             "type",
@@ -74,6 +76,16 @@ class IssueSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def get_checklist(self, obj):
+        """Progress of the issue's checklist, e.g. {"done": 2, "total": 5}; null when it has none."""
+        total = getattr(obj, "checklist_total", None)
+        if total is None:
+            items = list(obj.checklist_items.values_list("done", flat=True)) if obj.pk else []
+            total, done = len(items), sum(items)
+        else:
+            done = obj.checklist_done
+        return {"done": done, "total": total} if total else None
 
     def _project(self):
         if self.instance is not None and hasattr(self.instance, "project"):
@@ -186,3 +198,65 @@ def _positive_int(raw):
     else:
         return None
     return value if 0 < value <= 2**63 - 1 else None
+
+
+MAX_CHECKLIST_ITEMS = 100
+
+
+class ChecklistItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChecklistItem
+        fields = ["id", "text", "done", "position", "created_at"]
+        read_only_fields = ["created_at"]
+
+    def validate_text(self, value):
+        text = " ".join(value.split())
+        if not text:
+            raise serializers.ValidationError("This field may not be blank.")
+        return text
+
+
+class IssueBriefSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Issue
+        fields = ["id", "number", "title", "status", "project"]
+
+
+class IssueRelationSerializer(serializers.ModelSerializer):
+    """A link as seen from one issue: `direction` is "out" for links it made, "in" for links to it."""
+
+    other = serializers.SerializerMethodField()
+    direction = serializers.SerializerMethodField()
+    target_id = serializers.PrimaryKeyRelatedField(source="target", queryset=Issue.objects.none(), write_only=True)
+
+    class Meta:
+        model = IssueRelation
+        fields = ["id", "kind", "direction", "other", "target_id", "created_at"]
+        read_only_fields = ["created_at"]
+
+    def _viewer_issue(self):
+        return self.context["issue"]
+
+    def get_direction(self, obj):
+        return "out" if obj.source_id == self._viewer_issue().pk else "in"
+
+    def get_other(self, obj):
+        other = obj.target if obj.source_id == self._viewer_issue().pk else obj.source
+        return IssueBriefSerializer(other).data
+
+    def get_fields(self):
+        fields = super().get_fields()
+        issue = self.context.get("issue")
+        if issue is not None:
+            fields["target_id"].queryset = Issue.objects.filter(project__workspace_id=issue.project.workspace_id).exclude(pk=issue.pk)
+        return fields
+
+    def validate(self, attrs):
+        issue, target, kind = self._viewer_issue(), attrs["target"], attrs["kind"]
+        # A link and its mirror would say the same thing ("#1 relates to #2" is "#2 relates to #1") or
+        # something impossible (two issues that block each other can never be started).
+        if IssueRelation.objects.filter(
+            Q(source=issue, target=target, kind=kind) | Q(source=target, target=issue, kind=kind)
+        ).exists():
+            raise serializers.ValidationError("These issues are already linked this way.")
+        return attrs

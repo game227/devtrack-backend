@@ -55,6 +55,7 @@
 | `live.0001` | Per-workspace change clock for live updates | additive |
 | `activities.0002`, `integrations.0005` | Admin display names only (no schema change) | none |
 | `issues.0008` | Saved views (named issue-list filters) | additive |
+| `issues.0009` | Checklist items and links between issues | additive |
 
 The data migrations were tested against real data (see `apps/issues/test_numbers.py`) and applied to
 the development database. Several of them add required columns (`issues.number`,
@@ -100,7 +101,7 @@ The previous code does not know the new migrations, so reverse them **while the 
 deployed** (from its shell), then redeploy the previous release:
 
 ```bash
-python manage.py migrate issues 0004  # also drops saved views (0008)
+python manage.py migrate issues 0004  # also drops saved views, checklists and links (0008-0009)
 python manage.py migrate projects 0005
 python manage.py migrate workspaces 0002
 python manage.py migrate accounts 0004

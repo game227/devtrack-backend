@@ -59,3 +59,18 @@ class CanEditIssue(BasePermission):
             keys = set(data.keys()) if hasattr(data, "keys") else None
             return bool(keys) and keys <= ASSIGNEE_EDITABLE_FIELDS
         return False
+
+
+class CanWorkOnIssue(BasePermission):
+    """Checklist and links: anyone in the workspace reads them; the reporter and the assignee change them.
+
+    Ticking off steps and noting what blocks the work is part of doing it, so unlike the issue's own
+    fields the assignee has full control here.
+    """
+
+    def has_object_permission(self, request, view, obj):
+        if not _is_workspace_member(request.user, obj):
+            return False
+        if request.method in SAFE_METHODS:
+            return True
+        return request.user.id in (obj.reporter_id, obj.assignee_id)

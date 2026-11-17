@@ -1,23 +1,39 @@
+from django.db import transaction
+from django.db.models import Count, Max, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.throttling import UserRateThrottle
 
 from apps.common.filters import StableOrderingFilter
 from apps.common.lookup import body_value, parse_id
+from apps.live.models import touch
 from apps.projects.models import Project
 from apps.workspaces.models import Workspace
 from apps.workspaces.permissions import get_membership
 
 from .export import issues_csv_response
 from .filters import IssueFilter
-from .models import Issue, SavedView
-from .permissions import CanDeleteIssue, CanEditIssue, IsIssueWorkspaceMember
-from .serializers import IssueSerializer, SavedViewSerializer
+from .models import ChecklistItem, Issue, IssueRelation, SavedView
+from .permissions import CanDeleteIssue, CanEditIssue, CanWorkOnIssue, IsIssueWorkspaceMember
+from .serializers import (
+    MAX_CHECKLIST_ITEMS,
+    ChecklistItemSerializer,
+    IssueRelationSerializer,
+    IssueSerializer,
+    SavedViewSerializer,
+)
+
+
+def with_checklist_counts(queryset):
+    return queryset.annotate(
+        checklist_total=Count("checklist_items"),
+        checklist_done=Count("checklist_items", filter=Q(checklist_items__done=True)),
+    )
 
 
 class IssueScopeMixin:
@@ -34,7 +50,7 @@ class IssueScopeMixin:
     def get_queryset(self):
         project_id = self.request.query_params.get("project")
         workspace_id = self.request.query_params.get("workspace")
-        base = Issue.objects.select_related("assignee", "reporter").prefetch_related("labels")
+        base = with_checklist_counts(Issue.objects.select_related("assignee", "reporter").prefetch_related("labels"))
 
         if project_id:
             project = get_object_or_404(Project, pk=parse_id(project_id, "project"))
@@ -77,7 +93,9 @@ class IssueListCreateView(IssueScopeMixin, generics.ListCreateAPIView):
 
 
 class IssueDetailView(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Issue.objects.select_related("assignee", "reporter", "project__workspace").prefetch_related("labels")
+    queryset = with_checklist_counts(
+        Issue.objects.select_related("assignee", "reporter", "project__workspace").prefetch_related("labels")
+    )
     serializer_class = IssueSerializer
 
     def perform_update(self, serializer):
@@ -169,3 +187,100 @@ class SavedViewDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         return SavedView.objects.filter(owner=self.request.user).select_related("workspace", "project")
+
+
+class IssueChildMixin:
+    """Views of something that hangs off one issue (/issues/<issue_pk>/...), checked with CanWorkOnIssue."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get_issue(self):
+        if not hasattr(self, "_issue"):
+            issue = get_object_or_404(Issue.objects.select_related("project__workspace"), pk=self.kwargs["issue_pk"])
+            permission = CanWorkOnIssue()
+            if not permission.has_object_permission(self.request, self, issue):
+                if get_membership(self.request.user, issue.project.workspace) is None:
+                    raise NotFound()
+                raise PermissionDenied("Only the issue's creator or assignee can change this.")
+            self._issue = issue
+        return self._issue
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if "issue_pk" in self.kwargs:
+            context["issue"] = self.get_issue()
+        return context
+
+
+class ChecklistListCreateView(IssueChildMixin, generics.ListCreateAPIView):
+    serializer_class = ChecklistItemSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return ChecklistItem.objects.filter(issue=self.get_issue())
+
+    def perform_create(self, serializer):
+        issue = self.get_issue()
+        with transaction.atomic():
+            Issue.objects.select_for_update().filter(pk=issue.pk).first()
+            items = ChecklistItem.objects.filter(issue=issue)
+            if items.count() >= MAX_CHECKLIST_ITEMS:
+                raise ValidationError(f"A checklist can hold up to {MAX_CHECKLIST_ITEMS} items.")
+            position = (items.aggregate(top=Max("position"))["top"] or 0) + 1
+            serializer.save(issue=issue, created_by=self.request.user, position=position)
+        touch(issue.project.workspace_id, "issues")
+
+
+class ChecklistItemDetailView(IssueChildMixin, generics.UpdateAPIView, generics.DestroyAPIView):
+    serializer_class = ChecklistItemSerializer
+    http_method_names = ["patch", "delete"]
+
+    def get_object(self):
+        item = get_object_or_404(ChecklistItem.objects.select_related("issue__project__workspace"), pk=self.kwargs["pk"])
+        self.kwargs["issue_pk"] = item.issue_id
+        self.get_issue()
+        return item
+
+    def get_serializer_context(self):
+        return generics.GenericAPIView.get_serializer_context(self)
+
+    def perform_update(self, serializer):
+        serializer.save()
+        touch(serializer.instance.issue.project.workspace_id, "issues")
+
+    def perform_destroy(self, instance):
+        workspace_id = instance.issue.project.workspace_id
+        instance.delete()
+        touch(workspace_id, "issues")
+
+
+class IssueRelationListCreateView(IssueChildMixin, generics.ListCreateAPIView):
+    serializer_class = IssueRelationSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        issue = self.get_issue()
+        return IssueRelation.objects.filter(Q(source=issue) | Q(target=issue)).select_related("source", "target")
+
+    def perform_create(self, serializer):
+        issue = self.get_issue()
+        serializer.save(source=issue, created_by=self.request.user)
+        touch(issue.project.workspace_id, "issues")
+
+
+class IssueRelationDetailView(IssueChildMixin, generics.DestroyAPIView):
+    """Remove a link. Either end's creator or assignee may, since it shows on both issues."""
+
+    def get_object(self):
+        relation = get_object_or_404(IssueRelation.objects.select_related("source__project__workspace", "target"), pk=self.kwargs["pk"])
+        allowed = CanWorkOnIssue()
+        if not any(allowed.has_object_permission(self.request, self, end) for end in (relation.source, relation.target)):
+            if get_membership(self.request.user, relation.source.project.workspace) is None:
+                raise NotFound()
+            raise PermissionDenied("Only the creator or assignee of one of the issues can remove this link.")
+        return relation
+
+    def perform_destroy(self, instance):
+        workspace_id = instance.source.project.workspace_id
+        instance.delete()
+        touch(workspace_id, "issues")

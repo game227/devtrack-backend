@@ -133,3 +133,49 @@ class SavedView(models.Model):
 
 
 SAVED_VIEW_FILTER_KEYS = ("status", "type", "priority", "assignee", "label")
+
+
+class ChecklistItem(models.Model):
+    """One step of an issue's checklist ("- [ ] write tests"), ticked off as the work goes."""
+
+    issue = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name="checklist_items")
+    text = models.CharField(max_length=200)
+    done = models.BooleanField(default=False)
+    position = models.PositiveIntegerField(default=0)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "id"]
+
+    def __str__(self):
+        return self.text
+
+
+class IssueRelation(models.Model):
+    """A link between two issues of the same workspace, stored once and shown from both ends.
+
+    "#3 blocks #7" is shown on #7 as "blocked by #3"; "duplicates" reads "duplicated by" from the other
+    end; "relates to" reads the same both ways.
+    """
+
+    class Kind(models.TextChoices):
+        BLOCKS = "blocks", "Blocks"
+        DUPLICATES = "duplicates", "Duplicates"
+        RELATES = "relates", "Relates to"
+
+    source = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name="relations_out")
+    target = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name="relations_in")
+    kind = models.CharField(max_length=12, choices=Kind.choices)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["kind", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["source", "target", "kind"], name="issues_relation_unique"),
+            models.CheckConstraint(condition=~models.Q(source=models.F("target")), name="issues_relation_not_self"),
+        ]
+
+    def __str__(self):
+        return f"{self.source_id} {self.kind} {self.target_id}"

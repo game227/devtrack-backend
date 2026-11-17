@@ -2,11 +2,28 @@ from django.contrib import admin
 
 from apps.adminui.display import chip, key
 
-from .models import Issue, SavedView
+from .models import ChecklistItem, Issue, IssueRelation, SavedView
+
+
+class ChecklistItemInline(admin.TabularInline):
+    model = ChecklistItem
+    fields = ["text", "done", "position"]
+    extra = 0
+
+
+class IssueRelationInline(admin.TabularInline):
+    model = IssueRelation
+    fk_name = "source"
+    fields = ["kind", "target"]
+    raw_id_fields = ["target"]
+    extra = 0
+    verbose_name = "link"
+    verbose_name_plural = "links from this issue"
 
 
 @admin.register(Issue)
 class IssueAdmin(admin.ModelAdmin):
+    inlines = [ChecklistItemInline, IssueRelationInline]
     list_display = ["issue_key", "title", "project", "status_chip", "priority_chip", "assignee", "due_date", "updated_at"]
     list_display_links = ["issue_key", "title"]
     list_filter = ["status", "priority", "type", ("project", admin.RelatedOnlyFieldListFilter)]

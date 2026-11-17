@@ -67,6 +67,13 @@ rule-based project health (with structured, localizable risks), developer analyt
 - **CSV export**: `GET /issues/export/?project=<id>` (or `workspace=<id>`) takes the issue list's filters and
   `lang` (`en`/`uz`/`ru`) and streams up to 10,000 rows. Cells that a spreadsheet would run as a formula
   are prefixed with `'`; 30 exports per user per hour (`issue_export`).
+- **Checklists**: `GET|POST /issues/<id>/checklist/`, `PATCH|DELETE /issues/checklist/<item>/` (up to 100
+  steps). Every issue carries `checklist: {done, total}` (null when empty) for list rows and cards.
+- **Links between issues**: `GET|POST /issues/<id>/relations/` with `kind` (`blocks`, `duplicates`,
+  `relates`) and `target_id` (same workspace), `DELETE /issues/relations/<id>/`. A link is stored once and
+  listed from both ends with `direction` (`out`/`in`); a mirror of an existing link is refused, so two
+  issues can never block each other.
+- Checklist and links are read by any workspace member and changed by the issue's creator or assignee.
 - **Saved views**: `GET|POST /issues/views/?project=<id>|workspace=<id>`, `PATCH|DELETE /issues/views/<id>/`.
   A named set of list filters (`status`, `type`, `priority`, `assignee`, `label`), private to its owner,
   up to 30 per list. The SPA keeps the current filters in the URL, so a filtered list can be shared.
