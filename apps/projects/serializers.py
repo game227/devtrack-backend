@@ -35,6 +35,14 @@ class ProjectSerializer(serializers.ModelSerializer):
         # letting it be patched would let a project owner drop a project into anyone's workspace.
         read_only_fields = ["id", "workspace", "owner", "created_at", "updated_at"]
 
+    def validate(self, attrs):
+        # On a partial update, compare with the date that is not being changed.
+        start = attrs.get("start_date", getattr(self.instance, "start_date", None))
+        target = attrs.get("target_date", getattr(self.instance, "target_date", None))
+        if start and target and target < start:
+            raise serializers.ValidationError({"target_date": "The target date cannot be before the start date."})
+        return attrs
+
     def get_fields(self):
         fields = super().get_fields()
         # A project can only be assigned to a team of its own workspace.

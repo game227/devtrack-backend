@@ -243,3 +243,27 @@ class ProjectMemberSpecialtyTests(TestCase):
         self.assertEqual(self.client.patch(self.detail_url(self.dev), {"specialty": "frontend"}, format="json").status_code, 403)
         self.client.force_authenticate(self.outsider)
         self.assertEqual(self.client.patch(self.detail_url(self.dev), {"specialty": "frontend"}, format="json").status_code, 403)
+
+
+class ProjectDateTests(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        from apps.workspaces.models import Membership, Workspace
+
+        self.owner = get_user_model().objects.create_user(username="pd", email="pd@example.com", password="pw")
+        self.workspace = Workspace.objects.create(name="PD", owner=self.owner)
+        Membership.objects.create(workspace=self.workspace, user=self.owner, role="owner")
+        self.project = Project.objects.create(workspace=self.workspace, name="P", owner=self.owner)
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+        self.url = reverse("project-detail", args=[self.project.id])
+
+    def test_target_cannot_come_before_start(self):
+        self.assertEqual(self.client.patch(self.url, {"start_date": "2026-12-10", "target_date": "2026-12-01"}, format="json").status_code, 400)
+        self.assertEqual(self.client.patch(self.url, {"start_date": "2026-12-01", "target_date": "2026-12-10"}, format="json").status_code, 200)
+        # A partial update is compared with the stored other date.
+        response = self.client.patch(self.url, {"target_date": "2026-11-20"}, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("target_date", response.data)
+        self.assertEqual(self.client.patch(self.url, {"start_date": None, "target_date": None}, format="json").status_code, 200)
