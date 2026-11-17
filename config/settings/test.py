@@ -33,6 +33,7 @@ REST_FRAMEWORK = {
         "password_check": "100000/min",
         "issue_export": "100000/hour",
         "attachment_upload": "100000/hour",
+        "demo_start": "100000/hour",
     },
 }
 

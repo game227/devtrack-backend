@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     "apps.workspaces",
     "apps.projects",
     "apps.issues",
+    "apps.demo",
     "apps.comments",
     "apps.activities",
     "apps.analytics",
@@ -189,7 +190,7 @@ _NUM_PROXIES = env("NUM_PROXIES", default="").strip()
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.demo.authentication.DemoAwareJWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
@@ -225,6 +226,7 @@ REST_FRAMEWORK = {
         "password_check": "10/min",
         "issue_export": "30/hour",
         "attachment_upload": "60/hour",
+        "demo_start": "5/hour",
     },
 }
 
@@ -239,6 +241,12 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS", default=["http://localhost:5173"]
 )
+# "Try the demo": throwaway accounts with a sample workspace. Off unless explicitly enabled; when on, run
+# `manage.py cleanup_demo` hourly (expired demos are also swept whenever a new one starts).
+DEMO_ENABLED = env.bool("DEMO_ENABLED", default=False)
+DEMO_TTL_HOURS = env.int("DEMO_TTL_HOURS", default=24)
+DEMO_MAX_ACTIVE = env.int("DEMO_MAX_ACTIVE", default=200)
+
 # The frontend reads the file name of a download (the CSV export) from this header.
 CORS_EXPOSE_HEADERS = ["Content-Disposition"]
 

@@ -58,6 +58,7 @@
 | `issues.0009` | Checklist items and links between issues | additive |
 | `issues.0010` | `estimate` (story points, nullable) | additive |
 | `issues.0011` | Issue attachments (files under `attachments/` in media storage) | additive |
+| `demo.0001` | Demo account markers (unused while `DEMO_ENABLED` is off) | additive |
 
 The data migrations were tested against real data (see `apps/issues/test_numbers.py`) and applied to
 the development database. Several of them add required columns (`issues.number`,
@@ -97,6 +98,13 @@ Check these against the bot before or with the backend deploy:
 - The day after: the backup job's log shows an upload. Rehearse a restore into a scratch database
   (docs/BACKUP.md).
 
+### Demo mode (optional)
+
+Leave `DEMO_ENABLED` unset for the first deploy. To offer "Try the demo" later: set `DEMO_ENABLED=true`
+on the web service and `VITE_DEMO_ENABLED=true` on the frontend build, and add a Render cron job running
+`python manage.py cleanup_demo` hourly. With more than one web instance the demo throttle needs the
+shared `CACHE_URL`.
+
 ### Attachments and storage
 
 Attachments live in the default media storage under `attachments/<random>`. On the Render disk they are
@@ -118,6 +126,7 @@ python manage.py migrate accounts 0004
 python manage.py migrate integrations 0003
 python manage.py migrate live zero
 python manage.py migrate activities 0001
+python manage.py migrate demo zero
 ```
 
 This was rehearsed on a seeded copy: all eight migrations reverse cleanly, and the `master` code then

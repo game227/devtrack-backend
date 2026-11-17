@@ -83,6 +83,11 @@ rule-based project health (with structured, localizable risks), developer analyt
   20 per issue; 60 uploads per user per hour. Stored under random names and only ever sent through the
   API to workspace members, as a download (`nosniff`, sandbox CSP). Any member may attach; the uploader,
   the issue's creator or an admin may remove.
+- **Demo mode** (off unless `DEMO_ENABLED=true`): `POST /demo/` (5 per IP per hour) creates a throwaway
+  account with two sample teammates and a seeded workspace, and returns its tokens. Demo accounts cannot
+  invite, use GitHub or Telegram, change email/password/2FA or their profile, or upload files
+  (`apps/demo/authentication.py`). They expire after `DEMO_TTL_HOURS` (24); `manage.py cleanup_demo`
+  deletes them with everything they own, and at most `DEMO_MAX_ACTIVE` (200) run at once.
 - **Saved views**: `GET|POST /issues/views/?project=<id>|workspace=<id>`, `PATCH|DELETE /issues/views/<id>/`.
   A named set of list filters (`status`, `type`, `priority`, `assignee`, `label`), private to its owner,
   up to 30 per list. The SPA keeps the current filters in the URL, so a filtered list can be shared.

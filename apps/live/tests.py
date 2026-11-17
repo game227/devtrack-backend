@@ -119,3 +119,20 @@ class ChangesEndpointTests(TestCase):
         changed = self.changes(before).data["changed"]
         self.assertIn("issues", changed)
         self.assertIn("members", changed)
+
+
+class BulkWorkspaceDeleteTests(TestCase):
+    def test_deleting_several_workspaces_at_once_does_not_recreate_their_clocks(self):
+        from django.contrib.auth import get_user_model
+
+        from apps.issues.models import Issue
+        from apps.projects.models import Project
+        from apps.workspaces.models import Membership, Workspace
+
+        owner = get_user_model().objects.create_user(username="bulk", email="bulk@example.com", password="pw")
+        for name in ("A", "B"):
+            workspace = Workspace.objects.create(name=name, owner=owner)
+            Membership.objects.create(workspace=workspace, user=owner, role="owner")
+            Issue.objects.create(project=Project.objects.create(workspace=workspace, name="P", owner=owner), title="t", reporter=owner)
+        Workspace.objects.filter(name__in=["A", "B"]).delete()
+        self.assertFalse(Workspace.objects.filter(name__in=["A", "B"]).exists())

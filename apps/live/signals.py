@@ -1,5 +1,6 @@
 """Which saves and deletes count as a change to which part of a workspace."""
 
+from django.db.models import QuerySet
 from django.db.models.signals import m2m_changed, post_delete, post_save
 
 from apps.comments.models import Comment
@@ -42,7 +43,10 @@ WATCHED = {
 
 
 def _mark(sender, instance, **kwargs):
-    if kwargs.get("signal") is post_delete and isinstance(kwargs.get("origin"), Workspace):
+    origin = kwargs.get("origin")
+    if kwargs.get("signal") is post_delete and (
+        isinstance(origin, Workspace) or (isinstance(origin, QuerySet) and origin.model is Workspace)
+    ):
         # The whole workspace is being deleted: its clock goes with it, and marking it from inside the
         # cascade would recreate a clock row for a workspace that is about to disappear.
         return
