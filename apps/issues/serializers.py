@@ -51,6 +51,7 @@ class IssueSerializer(serializers.ModelSerializer):
             "type",
             "status",
             "priority",
+            "estimate",
             "assignee",
             "assignee_id",
             "reporter",

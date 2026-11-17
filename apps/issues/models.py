@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.validators import MaxValueValidator
 from django.db import models, transaction
 from django.utils import timezone
 
@@ -31,6 +32,8 @@ class Issue(models.Model):
     type = models.CharField(max_length=15, choices=Type.choices, default=Type.TASK)
     status = models.CharField(max_length=15, choices=Status.choices, default=Status.BACKLOG)
     priority = models.CharField(max_length=10, choices=Priority.choices, default=Priority.NONE)
+    # Story points: how big the work is, on whatever scale the team uses (1, 2, 3, 5, 8...). Optional.
+    estimate = models.PositiveSmallIntegerField(null=True, blank=True, validators=[MaxValueValidator(100)])
     assignee = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,

@@ -74,6 +74,9 @@ rule-based project health (with structured, localizable risks), developer analyt
   listed from both ends with `direction` (`out`/`in`); a mirror of an existing link is refused, so two
   issues can never block each other.
 - Checklist and links are read by any workspace member and changed by the issue's creator or assignee.
+- **Estimates and burndown**: issues take an optional `estimate` (story points, 0-100).
+  `GET /cycles/<id>/burndown/` returns the work left at the end of each cycle day (points, or issues when
+  nothing is estimated) next to the ideal line; future days are `null`.
 - **Saved views**: `GET|POST /issues/views/?project=<id>|workspace=<id>`, `PATCH|DELETE /issues/views/<id>/`.
   A named set of list filters (`status`, `type`, `priority`, `assignee`, `label`), private to its owner,
   up to 30 per list. The SPA keeps the current filters in the URL, so a filtered list can be shared.
