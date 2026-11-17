@@ -57,6 +57,7 @@
 | `issues.0008` | Saved views (named issue-list filters) | additive |
 | `issues.0009` | Checklist items and links between issues | additive |
 | `issues.0010` | `estimate` (story points, nullable) | additive |
+| `issues.0011` | Issue attachments (files under `attachments/` in media storage) | additive |
 
 The data migrations were tested against real data (see `apps/issues/test_numbers.py`) and applied to
 the development database. Several of them add required columns (`issues.number`,
@@ -96,13 +97,21 @@ Check these against the bot before or with the backend deploy:
 - The day after: the backup job's log shows an upload. Rehearse a restore into a scratch database
   (docs/BACKUP.md).
 
+### Attachments and storage
+
+Attachments live in the default media storage under `attachments/<random>`. On the Render disk they are
+not reachable from the web. If `MEDIA_STORAGE_BUCKET` is set, the bucket must **not** be public (or use a
+separate private bucket), because the S3 settings use plain, unsigned URLs for avatars. Files are only
+ever served through `/issues/attachments/<id>/download/`. Optional env: `ATTACHMENT_MAX_BYTES` (default
+10 MB); the web server's request limit must allow that much.
+
 ## 6. Rolling back
 
 The previous code does not know the new migrations, so reverse them **while the new code is still
 deployed** (from its shell), then redeploy the previous release:
 
 ```bash
-python manage.py migrate issues 0004  # also drops saved views, checklists, links and estimates (0008-0010)
+python manage.py migrate issues 0004  # also drops saved views, checklists, links, estimates and attachment rows (0008-0011)
 python manage.py migrate projects 0005
 python manage.py migrate workspaces 0002
 python manage.py migrate accounts 0004

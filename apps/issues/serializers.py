@@ -7,7 +7,7 @@ from apps.milestones.models import Milestone
 from apps.projects.models import Label
 from apps.workspaces.serializers import UserBriefSerializer
 
-from .models import SAVED_VIEW_FILTER_KEYS, ChecklistItem, Issue, IssueRelation, SavedView
+from .models import SAVED_VIEW_FILTER_KEYS, ChecklistItem, Issue, IssueAttachment, IssueRelation, SavedView
 
 User = get_user_model()
 
@@ -261,3 +261,15 @@ class IssueRelationSerializer(serializers.ModelSerializer):
         ).exists():
             raise serializers.ValidationError("These issues are already linked this way.")
         return attrs
+
+
+class IssueAttachmentSerializer(serializers.ModelSerializer):
+    uploaded_by = UserBriefSerializer(read_only=True)
+    is_image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = IssueAttachment
+        fields = ["id", "name", "content_type", "size", "is_image", "uploaded_by", "created_at"]
+
+    def get_is_image(self, obj):
+        return obj.content_type.startswith("image/")

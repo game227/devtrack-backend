@@ -3,6 +3,8 @@ from django.core.validators import MaxValueValidator
 from django.db import models, transaction
 from django.utils import timezone
 
+from .attachments import attachment_upload_path
+
 
 class Issue(models.Model):
     class Type(models.TextChoices):
@@ -182,3 +184,21 @@ class IssueRelation(models.Model):
 
     def __str__(self):
         return f"{self.source_id} {self.kind} {self.target_id}"
+
+
+class IssueAttachment(models.Model):
+    """A file attached to an issue. Never served from a public URL: see attachments.py."""
+
+    issue = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name="attachments")
+    file = models.FileField(upload_to=attachment_upload_path)
+    name = models.CharField(max_length=120)
+    content_type = models.CharField(max_length=60)
+    size = models.PositiveIntegerField()
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self):
+        return self.name

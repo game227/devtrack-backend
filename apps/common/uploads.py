@@ -13,7 +13,12 @@ class MaxRequestSizeUploadHandler(FileUploadHandler):
     """
 
     def handle_raw_input(self, input_data, META, content_length, boundary, encoding=None):
-        if content_length and content_length > settings.MAX_UPLOAD_BYTES:
+        limit = settings.MAX_UPLOAD_BYTES
+        path = getattr(self.request, "path", "") or ""
+        if path.startswith("/api/v1/issues/") and path.endswith("/attachments/"):
+            # The file itself plus room for the multipart framing.
+            limit = settings.ATTACHMENT_MAX_BYTES + 64 * 1024
+        if content_length and content_length > limit:
             raise RequestDataTooBig("The request is larger than the allowed upload size.")
         return None
 

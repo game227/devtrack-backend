@@ -5,6 +5,9 @@ from apps.comments.views import IssueCommentsView
 from .views import (
     ChecklistItemDetailView,
     ChecklistListCreateView,
+    IssueAttachmentDetailView,
+    IssueAttachmentDownloadView,
+    IssueAttachmentListCreateView,
     IssueDetailView,
     IssueExportView,
     IssueListCreateView,
@@ -25,4 +28,7 @@ urlpatterns = [
     path("checklist/<int:pk>/", ChecklistItemDetailView.as_view(), name="checklist-item"),
     path("<int:issue_pk>/relations/", IssueRelationListCreateView.as_view(), name="issue-relations"),
     path("relations/<int:pk>/", IssueRelationDetailView.as_view(), name="issue-relation"),
+    path("<int:issue_pk>/attachments/", IssueAttachmentListCreateView.as_view(), name="issue-attachments"),
+    path("attachments/<int:pk>/", IssueAttachmentDetailView.as_view(), name="issue-attachment"),
+    path("attachments/<int:pk>/download/", IssueAttachmentDownloadView.as_view(), name="issue-attachment-download"),
 ]

@@ -1,28 +1,33 @@
 from django.db import transaction
 from django.db.models import Count, Max, Q
+from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.text import slugify
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from rest_framework.parsers import MultiPartParser
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 
 from apps.common.filters import StableOrderingFilter
 from apps.common.lookup import body_value, parse_id
 from apps.live.models import touch
 from apps.projects.models import Project
-from apps.workspaces.models import Workspace
+from apps.workspaces.models import Membership, Workspace
 from apps.workspaces.permissions import get_membership
 
+from .attachments import MAX_ATTACHMENTS_PER_ISSUE, check_upload
 from .export import issues_csv_response
 from .filters import IssueFilter
-from .models import ChecklistItem, Issue, IssueRelation, SavedView
+from .models import ChecklistItem, Issue, IssueAttachment, IssueRelation, SavedView
 from .permissions import CanDeleteIssue, CanEditIssue, CanWorkOnIssue, IsIssueWorkspaceMember
 from .serializers import (
     MAX_CHECKLIST_ITEMS,
     ChecklistItemSerializer,
+    IssueAttachmentSerializer,
     IssueRelationSerializer,
     IssueSerializer,
     SavedViewSerializer,
@@ -284,3 +289,87 @@ class IssueRelationDetailView(IssueChildMixin, generics.DestroyAPIView):
         workspace_id = instance.source.project.workspace_id
         instance.delete()
         touch(workspace_id, "issues")
+
+
+class AttachmentUploadThrottle(UserRateThrottle):
+    scope = "attachment_upload"
+
+
+def _member_issue(request, pk):
+    issue = get_object_or_404(Issue.objects.select_related("project__workspace"), pk=pk)
+    membership = get_membership(request.user, issue.project.workspace)
+    if membership is None:
+        raise NotFound()
+    return issue, membership
+
+
+class IssueAttachmentListCreateView(generics.ListCreateAPIView):
+    """Files on an issue. Anyone in the workspace can see and add them, as with comments."""
+
+    serializer_class = IssueAttachmentSerializer
+    permission_classes = [IsAuthenticated]
+    pagination_class = None
+    parser_classes = [MultiPartParser]
+
+    def get_throttles(self):
+        return [AttachmentUploadThrottle()] if self.request.method == "POST" else super().get_throttles()
+
+    def get_queryset(self):
+        issue, _ = _member_issue(self.request, self.kwargs["issue_pk"])
+        return IssueAttachment.objects.filter(issue=issue).select_related("uploaded_by")
+
+    def create(self, request, *args, **kwargs):
+        issue, _ = _member_issue(request, self.kwargs["issue_pk"])
+        upload = request.FILES.get("file")
+        if upload is None:
+            raise ValidationError({"file": "Choose a file to attach."})
+        try:
+            name, content_type = check_upload(upload)
+        except ValidationError as error:
+            raise ValidationError({"file": error.detail}) from error
+        with transaction.atomic():
+            Issue.objects.select_for_update().filter(pk=issue.pk).first()
+            if IssueAttachment.objects.filter(issue=issue).count() >= MAX_ATTACHMENTS_PER_ISSUE:
+                raise ValidationError({"file": f"An issue can hold up to {MAX_ATTACHMENTS_PER_ISSUE} files."})
+            attachment = IssueAttachment.objects.create(
+                issue=issue, file=upload, name=name, content_type=content_type, size=upload.size, uploaded_by=request.user
+            )
+        touch(issue.project.workspace_id, "issues")
+        return Response(self.get_serializer(attachment).data, status=201)
+
+
+class IssueAttachmentDetailView(generics.DestroyAPIView):
+    """DELETE: by whoever uploaded it, the issue's creator, or a workspace admin/owner."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get_object(self):
+        attachment = get_object_or_404(IssueAttachment.objects.select_related("issue"), pk=self.kwargs["pk"])
+        issue, membership = _member_issue(self.request, attachment.issue_id)
+        allowed = self.request.user.id in (attachment.uploaded_by_id, issue.reporter_id) or membership.role in (
+            Membership.Role.OWNER,
+            Membership.Role.ADMIN,
+        )
+        if not allowed:
+            raise PermissionDenied("Only the uploader, the issue's creator or a workspace admin can remove this file.")
+        return attachment
+
+    def perform_destroy(self, instance):
+        workspace_id = instance.issue.project.workspace_id
+        instance.delete()
+        touch(workspace_id, "issues")
+
+
+class IssueAttachmentDownloadView(generics.GenericAPIView):
+    """GET: the file itself, always as a download, with the type decided at upload time."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk):
+        attachment = get_object_or_404(IssueAttachment.objects.select_related("issue"), pk=pk)
+        _member_issue(request, attachment.issue_id)
+        response = FileResponse(attachment.file.open("rb"), as_attachment=True, filename=attachment.name, content_type=attachment.content_type)
+        response["X-Content-Type-Options"] = "nosniff"
+        response["Content-Security-Policy"] = "default-src 'none'; sandbox"
+        response["Cache-Control"] = "private, no-store"
+        return response

@@ -123,8 +123,10 @@ CACHES = {"default": environ.Env.cache_url_config(env("CACHE_URL", default="").s
 # mounting the admin at the site root.
 ADMIN_URL = (env("ADMIN_URL", default="").strip().strip("/") or "admin") + "/"
 
-# Largest multipart request accepted (avatars are the only uploads). Enforced before the body is read.
+# Largest multipart request accepted (avatars). Enforced before the body is read.
 MAX_UPLOAD_BYTES = int(env("MAX_UPLOAD_BYTES", default="").strip() or 3 * 1024 * 1024)
+# Issue attachments may be bigger; only the attachment upload endpoint accepts requests up to this size.
+ATTACHMENT_MAX_BYTES = int(env("ATTACHMENT_MAX_BYTES", default="").strip() or 10 * 1024 * 1024)
 FILE_UPLOAD_HANDLERS = [
     "apps.common.uploads.MaxRequestSizeUploadHandler",
     "django.core.files.uploadhandler.MemoryFileUploadHandler",
@@ -222,6 +224,7 @@ REST_FRAMEWORK = {
         "two_factor": "10/min",
         "password_check": "10/min",
         "issue_export": "30/hour",
+        "attachment_upload": "60/hour",
     },
 }
 

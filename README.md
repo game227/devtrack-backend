@@ -77,6 +77,12 @@ rule-based project health (with structured, localizable risks), developer analyt
 - **Estimates and burndown**: issues take an optional `estimate` (story points, 0-100).
   `GET /cycles/<id>/burndown/` returns the work left at the end of each cycle day (points, or issues when
   nothing is estimated) next to the ideal line; future days are `null`.
+- **Attachments**: `GET|POST /issues/<id>/attachments/` (multipart `file`), `DELETE /issues/attachments/<id>/`,
+  `GET /issues/attachments/<id>/download/`. Images (PNG, JPEG, GIF, WebP), PDF and plain text only, decided
+  from the file's bytes and matched against its extension; up to `ATTACHMENT_MAX_BYTES` (10 MB) each and
+  20 per issue; 60 uploads per user per hour. Stored under random names and only ever sent through the
+  API to workspace members, as a download (`nosniff`, sandbox CSP). Any member may attach; the uploader,
+  the issue's creator or an admin may remove.
 - **Saved views**: `GET|POST /issues/views/?project=<id>|workspace=<id>`, `PATCH|DELETE /issues/views/<id>/`.
   A named set of list filters (`status`, `type`, `priority`, `assignee`, `label`), private to its owner,
   up to 30 per list. The SPA keeps the current filters in the URL, so a filtered list can be shared.

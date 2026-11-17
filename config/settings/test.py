@@ -32,6 +32,7 @@ REST_FRAMEWORK = {
         "two_factor": "100000/min",
         "password_check": "100000/min",
         "issue_export": "100000/hour",
+        "attachment_upload": "100000/hour",
     },
 }
 
