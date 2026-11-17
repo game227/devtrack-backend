@@ -158,6 +158,11 @@ To switch the stream on:
 3. Build the frontend with `VITE_LIVE_STREAM=true`.
 4. Watch database connections: each stream opens a short connection every 2 s and closes it.
 
+Verified locally under `uvicorn config.asgi:application`: a new issue reached an open stream within one
+round. Under plain WSGI (runserver, sync gunicorn) Django buffers an async stream completely, so nothing
+arrives: the stream really does need ASGI. A change can be reported twice (the 3 s overlap that guards
+against commit races), which only costs one extra refetch.
+
 A later step could replace the 2 s check with PostgreSQL `LISTEN/NOTIFY`.
 
 ## 8. Deliberately left for later
