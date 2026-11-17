@@ -36,6 +36,8 @@ class DemoTests(TestCase):
         me = client.get(reverse("me")).data
         self.assertRegex(me["username"], r"^demo-[0-9a-f]{8}$")
         workspace = Workspace.objects.get(pk=data["workspace"])
+        # The sample workspace is the only one, so the app opens it.
+        self.assertEqual([w["id"] for w in client.get("/api/v1/workspaces/").data["results"]], [workspace.pk])
         self.assertEqual(workspace.owner.username, me["username"])
         self.assertEqual(Issue.objects.filter(project__workspace=workspace).count(), 10)
         issues = client.get(reverse("issue-list"), {"workspace": workspace.pk}).data

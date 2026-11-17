@@ -44,7 +44,7 @@ def create_demo(ttl):
     people = [visitor]
     for handle, first, last in TEAMMATES:
         mate = User.objects.create_user(
-            username=f"demo-{suffix}-{handle}", email=f"demo-{suffix}-{handle}@demo.invalid", first_name=first, last_name=last
+            username=f"{handle}-{suffix}", email=f"{handle}-{suffix}@demo.invalid", first_name=first, last_name=last
         )
         mate.set_unusable_password()
         mate.save(update_fields=["password"])
@@ -52,6 +52,8 @@ def create_demo(ttl):
     for person in people:
         DemoAccount.objects.create(user=person, expires_at=now + ttl)
 
+    # Every new account gets an empty personal workspace; in a demo it would only hide the sample one.
+    Workspace.objects.filter(owner__in=people, is_personal=True).delete()
     workspace = Workspace.objects.create(name="Demo: Bozor app", owner=visitor)
     Membership.objects.create(workspace=workspace, user=visitor, role=Membership.Role.OWNER)
     for mate in people[1:]:
