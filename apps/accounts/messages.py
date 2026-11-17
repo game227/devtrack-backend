@@ -13,6 +13,11 @@ PASSWORD_RESET = {
         "email": "Parolni tiklash uchun ushbu havoladan foydalaning: {link}",
         "telegram": "DevTrack parolini tiklash: {link}",
     },
+    "ru": {
+        "subject": "Сброс пароля DevTrack",
+        "email": "Чтобы сбросить пароль, перейдите по ссылке: {link}",
+        "telegram": "Сброс пароля DevTrack: {link}",
+    },
 }
 
 
@@ -33,6 +38,10 @@ EMAIL_VERIFICATION = {
     "uz": {
         "subject": "DevTrack email manzilini tasdiqlang",
         "email": "Bu email manzilingiz ekanligini tasdiqlang: {link}",
+    },
+    "ru": {
+        "subject": "Подтвердите адрес эл. почты в DevTrack",
+        "email": "Подтвердите, что это ваш адрес эл. почты: {link}",
     },
 }
 

@@ -6,7 +6,7 @@ DevTrack is three separate repositories that only talk over HTTP:
 | Repo | Role |
 |---|---|
 | **devtrack-backend** (this one) | REST API, PostgreSQL, GitHub integration |
-| [devtrack-frontend](https://github.com/game227/devtrack-frontend) | React SPA (Uzbek + English) and landing page |
+| [devtrack-frontend](https://github.com/game227/devtrack-frontend) | React SPA (Uzbek, Russian, English) and landing page |
 | [devtrack-telegram-bot](https://github.com/game227/devtrack-telegram-bot) | Telegram bot service (account linking, password-reset delivery) |
 
 ## Setup
@@ -91,7 +91,7 @@ rule-based project health (with structured, localizable risks), developer analyt
   workspace admins can delete it. Anyone who leaves a workspace loses these rights.
 - **Telegram**: password-reset links go to Telegram first (if linked) and fall back to email; if the bot
   service is down the request still succeeds via email.
-- **Password reset messages** are sent in the UI language (`lang`: `en` or `uz`) and delivered on a
+- **Password reset messages** are sent in the UI language (`lang`: `en`, `uz` or `ru`) and delivered on a
   background thread in production.
 
 ## GitHub: connect, import, link

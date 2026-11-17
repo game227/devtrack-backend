@@ -98,7 +98,7 @@ def _send_verification_email(user, lang):
 
 def _lang_from_request(request):
     lang = request.data.get("lang")
-    return lang if lang in ("en", "uz") else "en"
+    return lang if lang in ("en", "uz", "ru") else "en"
 
 
 class RegisterView(generics.CreateAPIView):

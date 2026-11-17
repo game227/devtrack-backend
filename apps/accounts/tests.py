@@ -66,6 +66,12 @@ class PasswordResetLanguageTests(TestCase):
         self.assertIn("/reset-password/", mail.outbox[0].body)
 
     @patch("apps.accounts.views.telegram_services.send_message", side_effect=BotServiceError("not linked"))
+    def test_email_can_be_russian(self, _send):
+        self.client.post(self.url, {"email": self.user.email, "lang": "ru"}, format="json")
+        self.assertEqual(mail.outbox[0].subject, "Сброс пароля DevTrack")
+        self.assertIn("/reset-password/", mail.outbox[0].body)
+
+    @patch("apps.accounts.views.telegram_services.send_message", side_effect=BotServiceError("not linked"))
     def test_defaults_to_english(self, _send):
         self.client.post(self.url, {"email": self.user.email}, format="json")
         self.assertEqual(mail.outbox[0].subject, "Reset your DevTrack password")
