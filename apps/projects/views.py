@@ -1,4 +1,8 @@
+from datetime import timedelta
+
+from django.db.models import Count, Exists, OuterRef, Q
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -11,7 +15,7 @@ from apps.common.lookup import body_value, parse_id
 from apps.workspaces.models import Membership, Workspace
 from apps.workspaces.permissions import get_membership
 
-from .models import Label, Note, Project, ProjectMember
+from .models import Label, Note, Project, ProjectFavorite, ProjectMember
 from .permissions import CanManageProject, IsProjectWorkspaceMember
 from .serializers import (
     LabelSerializer,
@@ -21,6 +25,23 @@ from .serializers import (
     ProjectMemberUpdateSerializer,
     ProjectSerializer,
 )
+
+# How many issues each project finished in each of the last WEEKS weeks (rolling 7-day windows ending
+# now), for the small throughput chart on project rows: done_week_0 is the oldest, the last is this week.
+WEEKS = 8
+
+
+def weekly_done_annotations():
+    now = timezone.now()
+    annotations = {}
+    for index in range(WEEKS):
+        start = now - timedelta(days=7 * (WEEKS - index))
+        end = now - timedelta(days=7 * (WEEKS - index - 1))
+        annotations[f"done_week_{index}"] = Count(
+            "issues",
+            filter=Q(issues__status="done", issues__completed_at__gte=start, issues__completed_at__lt=end),
+        )
+    return annotations
 
 
 class ProjectListCreateView(generics.ListCreateAPIView):
@@ -36,7 +57,17 @@ class ProjectListCreateView(generics.ListCreateAPIView):
         workspace = get_object_or_404(Workspace, pk=parse_id(workspace_id, "workspace"))
         if get_membership(self.request.user, workspace) is None:
             raise PermissionDenied("You are not a member of this workspace.")
-        return Project.objects.filter(workspace=workspace).select_related("owner").order_by("-created_at")
+        return (
+            Project.objects.filter(workspace=workspace)
+            .select_related("owner")
+            .annotate(
+                issue_total=Count("issues"),
+                issue_done=Count("issues", filter=Q(issues__status="done")),
+                favorited=Exists(ProjectFavorite.objects.filter(user=self.request.user, project=OuterRef("pk"))),
+                **weekly_done_annotations(),
+            )
+            .order_by("-created_at")
+        )
 
     def get_target_workspace(self):
         """The workspace a new project goes into, resolved and authorized before the body is validated."""
@@ -66,6 +97,27 @@ class ProjectDetailView(generics.RetrieveUpdateDestroyAPIView):
         if self.request.method in ("PUT", "PATCH", "DELETE"):
             return [IsAuthenticated(), CanManageProject()]
         return [IsAuthenticated(), IsProjectWorkspaceMember()]
+
+
+class ProjectFavoriteView(APIView):
+    """PUT keeps the project in the caller's sidebar, DELETE takes it out. Both are idempotent."""
+
+    permission_classes = [IsAuthenticated, IsProjectWorkspaceMember]
+
+    def get_project(self, pk):
+        project = get_object_or_404(Project.objects.select_related("workspace"), pk=pk)
+        self.check_object_permissions(self.request, project)
+        return project
+
+    def put(self, request, pk):
+        project = self.get_project(pk)
+        ProjectFavorite.objects.get_or_create(user=request.user, project=project)
+        return Response({"is_favorite": True})
+
+    def delete(self, request, pk):
+        project = self.get_project(pk)
+        ProjectFavorite.objects.filter(user=request.user, project=project).delete()
+        return Response({"is_favorite": False})
 
 
 class ProjectMembersView(generics.ListCreateAPIView):

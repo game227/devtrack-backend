@@ -30,6 +30,7 @@ class UserSerializer(serializers.ModelSerializer):
             "avatar",
             "bio",
             "title",
+            "weekly_digest",
             "date_joined",
         ]
         read_only_fields = ["id", "username", "email", "email_verified", "totp_enabled", "date_joined"]

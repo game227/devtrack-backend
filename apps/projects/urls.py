@@ -5,6 +5,7 @@ from apps.comments.views import ProjectCommentsView
 
 from .views import (
     ProjectDetailView,
+    ProjectFavoriteView,
     ProjectListCreateView,
     ProjectMemberDetailView,
     ProjectMembersView,
@@ -14,6 +15,7 @@ from .views import (
 urlpatterns = [
     path("", ProjectListCreateView.as_view(), name="project-list"),
     path("<int:pk>/", ProjectDetailView.as_view(), name="project-detail"),
+    path("<int:pk>/favorite/", ProjectFavoriteView.as_view(), name="project-favorite"),
     path("<int:pk>/members/", ProjectMembersView.as_view(), name="project-members"),
     path(
         "<int:pk>/members/<int:user_id>/",

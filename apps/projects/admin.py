@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from apps.adminui.display import chip, excerpt
 
-from .models import Label, Note, Project, ProjectMember
+from .models import Label, Note, Project, ProjectFavorite, ProjectMember
 
 
 @admin.register(Project)
@@ -51,3 +51,9 @@ class NoteAdmin(admin.ModelAdmin):
     @admin.display(description="Note")
     def short_body(self, obj):
         return excerpt(obj.body)
+
+
+@admin.register(ProjectFavorite)
+class ProjectFavoriteAdmin(admin.ModelAdmin):
+    list_display = ("user", "project", "created_at")
+    raw_id_fields = ("user", "project")

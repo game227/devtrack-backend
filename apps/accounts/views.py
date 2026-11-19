@@ -4,7 +4,6 @@ import threading
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
-from django.core.mail import EmailMessage
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_encode
 from rest_framework import generics, status
@@ -22,6 +21,7 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 # dependency direction — justified because password reset (a leaf-app view)
 # needs to prefer an out-of-band delivery channel a feature app owns. Only
 # the stateless services module is imported, never telegram_bot's models.
+from apps.common.mail import send_email
 from apps.telegram_bot import services as telegram_services
 
 from . import totp
@@ -55,10 +55,9 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
-def _send_email(subject, body, to):
-    """Send one plain-text email; replies go to the support address rather than the sending domain."""
-    reply_to = [settings.SUPPORT_EMAIL] if settings.SUPPORT_EMAIL else None
-    EmailMessage(subject=subject, body=body, to=[to], reply_to=reply_to).send(fail_silently=False)
+def _send_email(message, to):
+    """Send one account email (plain text plus its branded HTML part)."""
+    send_email(message["subject"], message["email"], to, html=message.get("html"))
 
 
 def _deliver_password_reset(user_id, email, message):
@@ -73,14 +72,14 @@ def _deliver_password_reset(user_id, email, message):
         pass  # not linked, or the bot service call failed — fall back to email
 
     try:
-        _send_email(message["subject"], message["email"], email)
+        _send_email(message, email)
     except Exception:  # noqa: BLE001 — never let delivery problems reach the caller
         logger.exception("Password reset email could not be delivered")
 
 
 def _deliver_email_verification(email, message):
     try:
-        _send_email(message["subject"], message["email"], email)
+        _send_email(message, email)
     except Exception:  # noqa: BLE001 — never let delivery problems reach the caller
         logger.exception("Verification email could not be delivered")
 

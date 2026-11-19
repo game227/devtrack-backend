@@ -58,6 +58,10 @@
 | `issues.0009` | Checklist items and links between issues | additive |
 | `issues.0010` | `estimate` (story points, nullable) | additive |
 | `issues.0011` | Issue attachments (files under `attachments/` in media storage) | additive |
+| `issues.0012` | Share links, recurring rules, time entries | additive |
+| `projects.0007` | `wip_limits` | additive |
+| `projects.0008` | Favorite projects (`ProjectFavorite`) | additive |
+| `accounts.0008` | `weekly_digest` preference | additive |
 | `notifications.0002` | Web Push subscriptions | additive |
 | `demo.0001` | Demo account markers (unused while `DEMO_ENABLED` is off) | additive |
 
@@ -65,6 +69,10 @@ The data migrations were tested against real data (see `apps/issues/test_numbers
 the development database. Several of them add required columns (`issues.number`,
 `projects.issue_counter`, the two-factor fields), so the **previous** code cannot insert rows into the new
 schema. That is why rolling back needs the steps in section 6, not just a redeploy.
+
+Share links now point at the API host (`https://<api>/s/<token>`), which serves the link preview and
+redirects to `FRONTEND_URL/share/<token>`, so `FRONTEND_URL` must be the public app address. If the app and
+the API later share a custom domain, `/s/` can be routed to the API there instead.
 
 ## 3. Render settings to add or change
 
@@ -99,6 +107,12 @@ Check these against the bot before or with the backend deploy:
 - The day after: the backup job's log shows an upload. Rehearse a restore into a scratch database
   (docs/BACKUP.md).
 
+### Scheduled jobs (new)
+
+Add Render cron jobs alongside the backup: `python manage.py create_recurring_issues` daily at 05:00, and
+`python manage.py send_weekly_digest` on Mondays at 06:00 (needs working email). Optional:
+`DIGEST_LANGUAGE` (`uz` by default).
+
 ### Web Push (optional)
 
 Run `python manage.py generate_vapid_keys` once and set both printed values on the web service
@@ -128,7 +142,7 @@ deployed** (from its shell), then redeploy the previous release:
 
 ```bash
 python manage.py migrate issues 0004  # also drops saved views, checklists, links, estimates and attachment rows (0008-0011)
-python manage.py migrate projects 0005
+python manage.py migrate projects 0005  # also drops wip_limits (0007)
 python manage.py migrate workspaces 0002
 python manage.py migrate accounts 0004
 python manage.py migrate integrations 0003

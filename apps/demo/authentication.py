@@ -13,7 +13,7 @@ BLOCKED = [
     ("/api/v1/auth/2fa/", None),
     ("/api/v1/auth/me/", {"PUT", "PATCH"}),
 ]
-BLOCKED_WRITE_SUFFIXES = ("/members/", "/transfer-ownership/", "/attachments/")
+BLOCKED_WRITE_SUFFIXES = ("/members/", "/transfer-ownership/", "/attachments/", "/share/")
 SAFE = {"GET", "HEAD", "OPTIONS"}
 
 

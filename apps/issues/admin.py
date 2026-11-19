@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from apps.adminui.display import chip, key
 
-from .models import ChecklistItem, Issue, IssueRelation, SavedView
+from .models import ChecklistItem, Issue, IssueRelation, IssueShareLink, RecurringIssue, SavedView, TimeEntry
 
 
 class ChecklistItemInline(admin.TabularInline):
@@ -57,3 +57,23 @@ class SavedViewAdmin(admin.ModelAdmin):
     search_fields = ["name", "owner__username"]
     raw_id_fields = ["owner", "workspace", "project"]
     readonly_fields = ["created_at"]
+
+
+@admin.register(RecurringIssue)
+class RecurringIssueAdmin(admin.ModelAdmin):
+    list_display = ["title", "project", "frequency", "next_run", "active"]
+    list_filter = ["frequency", "active"]
+    raw_id_fields = ["project", "assignee", "created_by"]
+
+
+@admin.register(IssueShareLink)
+class IssueShareLinkAdmin(admin.ModelAdmin):
+    list_display = ["issue", "created_by", "expires_at", "revoked"]
+    raw_id_fields = ["issue", "created_by"]
+    readonly_fields = ["token"]
+
+
+@admin.register(TimeEntry)
+class TimeEntryAdmin(admin.ModelAdmin):
+    list_display = ["issue", "user", "minutes", "spent_on"]
+    raw_id_fields = ["issue", "user"]

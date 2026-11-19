@@ -97,6 +97,28 @@ rule-based project health (with structured, localizable risks), developer analyt
   subscribing. Off until `WEB_PUSH_VAPID_PUBLIC_KEY`/`WEB_PUSH_VAPID_PRIVATE_KEY` are set
   (`manage.py generate_vapid_keys`); only the browser vendors' push services are accepted as endpoints,
   and subscriptions the service reports gone are deleted.
+- **Share links**: `GET|POST /issues/<id>/share/` (`days`: 1, 7 or 30) by the creator, assignee or an admin;
+  `DELETE /issues/share-links/<id>/` revokes. `GET /issues/shared/<token>/` (no sign-in, 60/min per IP) shows
+  title, status, description, assignee's username and checklist only. The links people copy go through
+  `GET /s/<token>?lang=uz|en|ru` (outside `/api`): Open Graph tags for chat apps such as Telegram, a
+  1200x630 card at `/s/<token>/card.png` drawn with Pillow (Geist, bundled under
+  `apps/issues/share_fonts/`, SIL OFL), and an immediate redirect to the app's `/share/<token>`. Both
+  answer only while the link is live, with the same throttle.
+- **Favorites**: `PUT|DELETE /projects/<id>/favorite/` stars or unstars a project for the signed-in user
+  (any workspace member); project rows carry `is_favorite`, and the list also `weekly_done` (issues
+  finished in each of the last 8 weeks, oldest first).
+- **Emails** (password reset, email verification, weekly digest) are sent as plain text with a branded
+  HTML part (`apps/common/mail.py`: tables and inline styles, no images; every name is escaped).
+- **Recurring issues**: `GET|POST /issues/recurring/project/<id>/`, `PATCH|DELETE /issues/recurring/<id>/`
+  (project owner or admin to change). `manage.py create_recurring_issues` (daily) opens the due ones.
+- **Bulk changes**: `POST /issues/bulk/ {ids, changes}` with status, priority, assignee_id, cycle or
+  milestone; each issue is checked like a single edit and the rest are reported as skipped.
+- **Time tracking**: `GET|POST /issues/<id>/time/` (minutes, note, spent_on), `DELETE /issues/time/<id>/` (own).
+- **History**: field changes (title, priority, type, assignee, due date, estimate, cycle, milestone) are
+  logged as `changed_issue`; `GET /activities/?issue=<id>` lists an issue's history with its comments.
+- **WIP limits**: `wip_limits` on a project, e.g. `{"in_progress": 5}`; the board warns past it.
+- **Weekly digest**: `manage.py send_weekly_digest` (Monday) emails owners and admins who keep
+  `weekly_digest` on; language from `DIGEST_LANGUAGE` (default `uz`).
 - **Saved views**: `GET|POST /issues/views/?project=<id>|workspace=<id>`, `PATCH|DELETE /issues/views/<id>/`.
   A named set of list filters (`status`, `type`, `priority`, `assignee`, `label`), private to its owner,
   up to 30 per list. The SPA keeps the current filters in the URL, so a filtered list can be shared.

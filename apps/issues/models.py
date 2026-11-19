@@ -202,3 +202,78 @@ class IssueAttachment(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class IssueShareLink(models.Model):
+    """A read-only link to one issue for someone outside the workspace (a client, a contractor).
+
+    The token is random and long; the public page shows the issue's title, status, description and
+    checklist progress, never comments, files or anyone's email. Links expire and can be revoked.
+    """
+
+    issue = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name="share_links")
+    token = models.CharField(max_length=64, unique=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="+")
+    expires_at = models.DateTimeField()
+    revoked = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def is_live(self):
+        return not self.revoked and self.expires_at > timezone.now()
+
+
+class RecurringIssue(models.Model):
+    """A rule that opens the same issue again and again ("Weekly report" every Monday)."""
+
+    class Frequency(models.TextChoices):
+        DAILY = "daily", "Every day"
+        WEEKLY = "weekly", "Every week"
+        MONTHLY = "monthly", "Every month"
+
+    project = models.ForeignKey("projects.Project", on_delete=models.CASCADE, related_name="recurring_issues")
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    type = models.CharField(max_length=15, choices=Issue.Type.choices, default=Issue.Type.TASK)
+    priority = models.CharField(max_length=10, choices=Issue.Priority.choices, default=Issue.Priority.NONE)
+    assignee = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="+")
+    frequency = models.CharField(max_length=10, choices=Frequency.choices)
+    next_run = models.DateField()
+    active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["next_run", "id"]
+
+    def __str__(self):
+        return self.title
+
+    def advance(self):
+        """The next date after `next_run` (monthly keeps the day, or the month's last day if shorter)."""
+        import calendar
+        import datetime as dt
+
+        day = self.next_run
+        if self.frequency == self.Frequency.DAILY:
+            return day + dt.timedelta(days=1)
+        if self.frequency == self.Frequency.WEEKLY:
+            return day + dt.timedelta(days=7)
+        year, month = (day.year + 1, 1) if day.month == 12 else (day.year, day.month + 1)
+        return day.replace(year=year, month=month, day=min(day.day, calendar.monthrange(year, month)[1]))
+
+
+class TimeEntry(models.Model):
+    """Time someone spent on an issue."""
+
+    issue = models.ForeignKey(Issue, on_delete=models.CASCADE, related_name="time_entries")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="time_entries")
+    minutes = models.PositiveIntegerField(validators=[MaxValueValidator(24 * 60)])
+    note = models.CharField(max_length=200, blank=True)
+    spent_on = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-spent_on", "-id"]

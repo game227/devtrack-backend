@@ -15,6 +15,8 @@ class User(AbstractUser):
     # from Membership.role, which is the workspace permission level.
     title = models.CharField(max_length=150, blank=True)
     email_verified = models.BooleanField(default=False)
+    # A Monday email with the workspace's projects, overdue work and what got done (owners and admins).
+    weekly_digest = models.BooleanField(default=True)
     # Two-factor authentication (TOTP). The secret is encrypted at rest; it is set during setup and only
     # takes effect once a code from the app has confirmed it (totp_enabled). Recovery codes are stored
     # hashed and each works once.

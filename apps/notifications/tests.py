@@ -148,3 +148,30 @@ class NotificationActorTests(TestCase):
         issue.save()
 
         self.assertTrue(Notification.objects.filter(recipient=reporter, verb="issue_assigned").exists())
+
+
+class NotificationContextTests(TestCase):
+    def test_a_comment_notification_names_the_author_and_the_issue(self):
+        from django.contrib.contenttypes.models import ContentType
+
+        from apps.comments.models import Comment
+        from apps.issues.models import Issue
+        from apps.projects.models import Project
+        from apps.workspaces.models import Membership, Workspace
+
+        from .models import Notification
+        from .serializers import NotificationSerializer
+
+        User = get_user_model()
+        me = User.objects.create_user(username="nc-me", email="ncme@example.com", password="pw")
+        alex = User.objects.create_user(username="nc-alex", email="ncalex@example.com", password="pw")
+        workspace = Workspace.objects.create(name="NC", owner=me)
+        Membership.objects.create(workspace=workspace, user=me, role="owner")
+        issue = Issue.objects.create(project=Project.objects.create(workspace=workspace, name="P", owner=me), title="Fix login", reporter=me)
+        comment = Comment.objects.create(content_type=ContentType.objects.get_for_model(Issue), object_id=issue.pk, author=alex, body="On it")
+        data = NotificationSerializer(Notification.objects.create(recipient=me, verb="commented", target=comment)).data
+        self.assertEqual(data["actor"], "nc-alex")
+        self.assertEqual(data["issue"], {"id": issue.pk, "number": issue.number, "title": "Fix login"})
+        data = NotificationSerializer(Notification.objects.create(recipient=me, verb="issue_assigned", target=issue)).data
+        self.assertIsNone(data["actor"])
+        self.assertEqual(data["issue"]["title"], "Fix login")

@@ -8,6 +8,7 @@ from django.http import JsonResponse
 from django.urls import include, path
 
 from apps.analytics.views import DashboardView, DeveloperAnalyticsView, SearchView
+from apps.issues.share_preview import ShareCardView, SharePreviewView
 from apps.projects.views import NoteDetailView
 
 
@@ -38,6 +39,9 @@ urlpatterns = [
     path("api/v1/telegram/", include("apps.telegram_bot.urls")),
     path("api/v1/changes/", include("apps.live.urls")),
     path("api/v1/demo/", include("apps.demo.urls")),
+    # Share links: a preview for chat apps (Open Graph tags and a card image) that sends people on to the app.
+    path("s/<str:token>", SharePreviewView.as_view(), name="share-preview"),
+    path("s/<str:token>/card.png", ShareCardView.as_view(), name="share-card"),
 ]
 
 if settings.DEBUG:

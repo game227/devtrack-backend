@@ -5,7 +5,7 @@ from rest_framework.test import APIClient
 
 from apps.workspaces.models import Membership, Workspace
 
-from .models import Label, Note, Project, ProjectMember
+from .models import Label, Note, Project, ProjectFavorite, ProjectMember
 
 User = get_user_model()
 
@@ -267,3 +267,96 @@ class ProjectDateTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("target_date", response.data)
         self.assertEqual(self.client.patch(self.url, {"start_date": None, "target_date": None}, format="json").status_code, 200)
+
+
+class ProjectCountTests(TestCase):
+    def test_list_rows_carry_issue_counts(self):
+        from apps.issues.models import Issue
+
+        user = get_user_model().objects.create_user(username="pc", email="pc@example.com", password="pw")
+        workspace = Workspace.objects.create(name="PC", owner=user)
+        Membership.objects.create(workspace=workspace, user=user, role="owner")
+        project = Project.objects.create(workspace=workspace, name="P", owner=user)
+        Issue.objects.create(project=project, title="a", reporter=user, status="done")
+        Issue.objects.create(project=project, title="b", reporter=user)
+        client = APIClient()
+        client.force_authenticate(user)
+        row = client.get(reverse("project-list"), {"workspace": workspace.id}).data["results"][0]
+        self.assertEqual((row["issue_count"], row["done_count"]), (2, 1))
+        detail = client.get(reverse("project-detail", args=[project.id])).data
+        self.assertEqual((detail["issue_count"], detail["done_count"]), (2, 1))
+
+
+class ProjectFavoriteTests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(username="fowner", email="fowner@example.com", password="pw")
+        self.member = User.objects.create_user(username="fmember", email="fmember@example.com", password="pw")
+        self.outsider = User.objects.create_user(username="foutsider", email="foutsider@example.com", password="pw")
+        self.workspace = Workspace.objects.create(name="FWS", owner=self.owner)
+        Membership.objects.create(workspace=self.workspace, user=self.owner, role=Membership.Role.OWNER)
+        Membership.objects.create(workspace=self.workspace, user=self.member, role=Membership.Role.MEMBER)
+        self.project = Project.objects.create(workspace=self.workspace, name="Starred", owner=self.owner)
+        self.url = reverse("project-favorite", args=[self.project.id])
+        self.client = APIClient()
+
+    def listed(self, user):
+        self.client.force_authenticate(user)
+        response = self.client.get(reverse("project-list"), {"workspace": self.workspace.id})
+        return {row["id"]: row["is_favorite"] for row in response.data["results"]}
+
+    def test_member_stars_and_unstars_and_it_is_personal(self):
+        self.client.force_authenticate(self.member)
+        self.assertEqual(self.client.put(self.url).data, {"is_favorite": True})
+        # Starring twice is harmless.
+        self.assertEqual(self.client.put(self.url).status_code, 200)
+        self.assertEqual(ProjectFavorite.objects.filter(user=self.member).count(), 1)
+        self.assertEqual(self.listed(self.member), {self.project.id: True})
+        # The owner's view of the same project is unaffected.
+        self.assertEqual(self.listed(self.owner), {self.project.id: False})
+        self.client.force_authenticate(self.member)
+        detail = self.client.get(reverse("project-detail", args=[self.project.id]))
+        self.assertTrue(detail.data["is_favorite"])
+        self.assertEqual(self.client.delete(self.url).data, {"is_favorite": False})
+        self.assertEqual(self.client.delete(self.url).status_code, 200)
+        self.assertEqual(self.listed(self.member), {self.project.id: False})
+
+    def test_outsider_cannot_star(self):
+        self.client.force_authenticate(self.outsider)
+        self.assertEqual(self.client.put(self.url).status_code, 403)
+        self.assertFalse(ProjectFavorite.objects.exists())
+
+    def test_anonymous_cannot_star(self):
+        self.assertEqual(self.client.put(self.url).status_code, 401)
+
+
+class ProjectWeeklyDoneTests(TestCase):
+    def test_lists_issues_finished_per_week_oldest_first(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from apps.issues.models import Issue
+
+        owner = User.objects.create_user(username="wowner", email="wowner@example.com", password="pw")
+        workspace = Workspace.objects.create(name="WWS", owner=owner)
+        Membership.objects.create(workspace=workspace, user=owner, role=Membership.Role.OWNER)
+        project = Project.objects.create(workspace=workspace, name="Throughput", owner=owner)
+        now = timezone.now()
+        for number, (status, days_ago) in enumerate(
+            [("done", 1), ("done", 2), ("done", 10), ("done", 60), ("todo", None)], start=1
+        ):
+            Issue.objects.create(
+                project=project,
+                number=number,
+                title=f"Issue {number}",
+                reporter=owner,
+                status=status,
+                completed_at=now - timedelta(days=days_ago) if days_ago else None,
+            )
+        client = APIClient()
+        client.force_authenticate(owner)
+        row = client.get(reverse("project-list"), {"workspace": workspace.id}).data["results"][0]
+        # Eight weeks, this week last: two this week, one the week before, the 60-day-old one is out of range.
+        self.assertEqual(row["weekly_done"], [0, 0, 0, 0, 0, 0, 1, 2])
+        detail = client.get(reverse("project-detail", args=[project.id])).data
+        self.assertIsNone(detail["weekly_done"])

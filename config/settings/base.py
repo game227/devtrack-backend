@@ -146,6 +146,8 @@ FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
 # Where people reach the team: shown in the web app, and the Reply-To of every email DevTrack sends. (The
 # From address stays DEFAULT_FROM_EMAIL, on a domain the mail provider has verified; a Gmail address
 # cannot be the sender through Resend, but replies go here.)
+# Language of the weekly digest email (the API does not store each user's UI language).
+DIGEST_LANGUAGE = env("DIGEST_LANGUAGE", default="uz")
 SUPPORT_EMAIL = env("SUPPORT_EMAIL", default="safary12800@gmail.com")
 
 GITHUB_CLIENT_ID = env("GITHUB_CLIENT_ID", default="")
@@ -227,6 +229,7 @@ REST_FRAMEWORK = {
         "issue_export": "30/hour",
         "attachment_upload": "60/hour",
         "demo_start": "5/hour",
+        "share_view": "60/min",
     },
 }
 

@@ -37,6 +37,7 @@ REST_FRAMEWORK = {
         "issue_export": "100000/hour",
         "attachment_upload": "100000/hour",
         "demo_start": "100000/hour",
+        "share_view": "100000/min",
     },
 }
 
