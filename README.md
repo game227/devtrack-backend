@@ -11,6 +11,9 @@ DevTrack is three separate repositories that only talk over HTTP:
 
 ## Setup
 
+New here? [QUICKSTART.md](QUICKSTART.md) walks through the database, the API and the web app together.
+
+
 ```bash
 python3 -m venv venv
 source venv/bin/activate
