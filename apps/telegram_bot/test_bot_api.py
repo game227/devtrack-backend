@@ -5,7 +5,6 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 from django.test import TestCase, override_settings
-from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -104,11 +103,14 @@ class BotIssuesTests(BotApiBase):
         self.assertTrue(data["issues"][0]["overdue"])
         self.assertEqual(data["issues"][0]["path"], f"/issues/{late.id}")
 
-    def test_each_issue_says_whether_the_user_may_edit_it(self):
+    def test_each_issue_says_whether_the_user_may_change_its_status(self):
         mine = self.issue("Mine", assignee=self.me)
-        theirs = self.issue("Theirs", assignee=self.me, reporter=self.other)
+        theirs = self.issue("Theirs", assignee=self.me, reporter=self.other)  # assigned to me: I report progress
         flags = {i["id"]: i["can_edit"] for i in self.client.get(self.url).data["issues"]}
-        self.assertEqual(flags, {mine.id: True, theirs.id: False})
+        self.assertEqual(flags, {mine.id: True, theirs.id: True})
+        bystander = self.issue("Bystander", reporter=self.other, assignee=self.other)
+        detail = self.client.get(f"/api/v1/telegram/bot/issues/{bystander.id}/")
+        self.assertEqual((detail.data["can_edit"], detail.data["number"]), (False, bystander.number))
 
     def test_scopes_narrow_the_list(self):
         late = self.issue("Late", assignee=self.me, due_date=self.today - dt.timedelta(days=1))
@@ -167,12 +169,18 @@ class BotIssueActionsTests(BotApiBase):
         self.assertEqual(issue.status, "done")
         self.assertEqual(Activity.objects.get(verb="moved_issue").actor, self.me)
 
-    def test_only_the_creator_can_change_status_like_in_the_web_app(self):
-        issue = self.issue("Theirs", reporter=self.other, assignee=self.me)
-        response = self.client.post(f"/api/v1/telegram/bot/issues/{issue.id}/status/", {"status": "done"}, format="json")
+    def test_the_assignee_can_change_status_but_a_bystander_cannot_like_in_the_web_app(self):
+        assigned = self.issue("Assigned to me", reporter=self.other, assignee=self.me)
+        response = self.client.post(f"/api/v1/telegram/bot/issues/{assigned.id}/status/", {"status": "done"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        assigned.refresh_from_db()
+        self.assertEqual(assigned.status, "done")
+
+        bystander = self.issue("Not mine", reporter=self.other, assignee=self.other)
+        response = self.client.post(f"/api/v1/telegram/bot/issues/{bystander.id}/status/", {"status": "done"}, format="json")
         self.assertEqual(response.status_code, 403)
-        issue.refresh_from_db()
-        self.assertNotEqual(issue.status, "done")
+        bystander.refresh_from_db()
+        self.assertNotEqual(bystander.status, "done")
 
     def test_status_must_be_a_real_one_and_the_user_must_be_a_member(self):
         issue = self.issue("Mine")
@@ -243,8 +251,14 @@ class NotificationPushTests(TestCase):
         Membership.objects.create(workspace=self.workspace, user=self.owner, role="owner")
         self.project = Project.objects.create(workspace=self.workspace, name="Push Project", owner=self.owner)
 
+    def join(self, user):
+        """Only members of the workspace are notified about it, so the recipient has to be one."""
+        Membership.objects.create(workspace=self.workspace, user=user, role="member")
+
     @patch("apps.telegram_bot.notify.services.notify")
     def test_an_assignment_is_pushed_with_a_structured_payload(self, mock_notify):
+        self.join(self.dev)
+        mock_notify.reset_mock()  # joining the workspace pushed an invitation; this test is about the assignment
         issue = Issue.objects.create(project=self.project, title="Ship it", reporter=self.owner, assignee=self.dev)
         mock_notify.assert_called_once_with(
             {"user_id": self.dev.id, "kind": "issue_assigned", "actor": "pushowner", "title": "Ship it", "excerpt": "", "path": f"/issues/{issue.id}"}
@@ -252,6 +266,7 @@ class NotificationPushTests(TestCase):
 
     @patch("apps.telegram_bot.notify.services.notify")
     def test_a_comment_carries_an_excerpt_and_points_at_the_issue(self, mock_notify):
+        self.join(self.dev)
         issue = Issue.objects.create(project=self.project, title="Talk", reporter=self.dev)
         Comment.objects.create(author=self.owner, body="Looks good " * 40, content_object=issue)
         payload = mock_notify.call_args.args[0]
@@ -260,7 +275,10 @@ class NotificationPushTests(TestCase):
 
     @patch("apps.telegram_bot.notify.services.notify")
     def test_workspace_and_project_invitations(self, mock_notify):
-        Membership.objects.create(workspace=self.workspace, user=self.dev, role="member")
+        from apps.workspaces.models import Invitation
+
+        Invitation.objects.create(workspace=self.workspace, user=self.dev, invited_by=self.owner)
+        self.join(self.dev)  # accepted
         self.assertEqual(mock_notify.call_args.args[0]["path"], "/dashboard")
         self.assertEqual(mock_notify.call_args.args[0]["title"], "Push WS")
         from apps.projects.models import ProjectMember
@@ -275,6 +293,7 @@ class NotificationPushTests(TestCase):
 
     @patch("apps.telegram_bot.notify.services.notify", side_effect=services.BotServiceError("down"))
     def test_a_dead_bot_service_never_breaks_the_action_that_caused_the_notification(self, mock_notify):
+        self.join(self.dev)
         issue = Issue.objects.create(project=self.project, title="Fine", reporter=self.owner, assignee=self.dev)
         self.assertTrue(Issue.objects.filter(pk=issue.pk).exists())
         self.assertTrue(Notification.objects.filter(recipient=self.dev).exists())
@@ -282,6 +301,7 @@ class NotificationPushTests(TestCase):
     @override_settings(TELEGRAM_NOTIFICATIONS_ENABLED=False)
     @patch("apps.telegram_bot.notify.services.notify")
     def test_off_by_default_means_no_calls_at_all(self, mock_notify):
+        self.join(self.dev)
         Issue.objects.create(project=self.project, title="Quiet", reporter=self.owner, assignee=self.dev)
         mock_notify.assert_not_called()
         self.assertTrue(Notification.objects.filter(recipient=self.dev).exists())
@@ -289,6 +309,8 @@ class NotificationPushTests(TestCase):
     @override_settings(TELEGRAM_NOTIFICATIONS_ASYNC=True)
     @patch("apps.telegram_bot.notify.threading.Thread")
     def test_by_default_delivery_leaves_the_request_thread(self, mock_thread):
+        self.join(self.dev)
+        mock_thread.reset_mock()  # joining the workspace started a delivery thread of its own
         Issue.objects.create(project=self.project, title="Async", reporter=self.owner, assignee=self.dev)
         mock_thread.assert_called_once()
         self.assertTrue(mock_thread.call_args.kwargs["daemon"])

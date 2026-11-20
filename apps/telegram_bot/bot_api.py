@@ -1,13 +1,12 @@
 """The API the Telegram bot service calls on a user's behalf.
 
 Every view resolves to the linked DevTrack user (see BotServiceAuthentication) and applies the same
-rules the web app does: workspace membership to see anything, and only an issue's creator may change
-its status. The bot never gets more than the user themself could do.
+rules the web app does: workspace membership to see anything, and only an issue's creator or its assignee
+may change its status. The bot never gets more than the user themself could do.
 """
 
 import datetime as dt
 
-from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status as http
@@ -42,10 +41,11 @@ def _workspace_ids(user):
 def _issue_brief(issue, today=None, viewer=None):
     today = today or timezone.localdate()
     return {
-        # Whether `viewer` may change this issue (only its creator can) — lets the bot offer a
-        # "Done" button only where it would work.
-        "can_edit": viewer is not None and issue.reporter_id == viewer.id,
+        # Whether `viewer` may change this issue's status (its creator and its assignee can) — lets the
+        # bot offer a "Done" button only where it would work.
+        "can_edit": viewer is not None and _may_change_status(viewer, issue),
         "id": issue.id,
+        "number": issue.number,
         "title": issue.title,
         "status": issue.status,
         "priority": issue.priority,
@@ -56,6 +56,10 @@ def _issue_brief(issue, today=None, viewer=None):
         "assignee": issue.assignee.username if issue.assignee_id else None,
         "path": f"/issues/{issue.id}",
     }
+
+
+def _may_change_status(user, issue):
+    return user.id in (issue.reporter_id, issue.assignee_id)
 
 
 def _visible_issue(user, issue_id):
@@ -176,9 +180,9 @@ class BotIssueStatusView(BotView):
         new_status = request.data.get("status")
         if new_status not in Issue.Status.values:
             raise ValidationError({"status": f"Must be one of {', '.join(Issue.Status.values)}."})
-        # Same rule as the web app: only the person who created an issue changes it.
-        if issue.reporter_id != request.user.id:
-            raise PermissionDenied("Only the person who created this issue can edit it.")
+        # Same rule as the web app: the person who created the issue, or the one it is assigned to.
+        if not _may_change_status(request.user, issue):
+            raise PermissionDenied("Only the person who created this issue or the one it is assigned to can change its status.")
         issue._actor = request.user
         issue.status = new_status
         issue.save(update_fields=["status", "updated_at"])

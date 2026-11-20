@@ -31,16 +31,21 @@ class GitHubRepositoryLinkSerializer(serializers.ModelSerializer):
         return obj.webhook_id is not None
 
 
+# owner/repo as GitHub allows them. The name is spliced into API URLs, so "." and ".." (path traversal)
+# and anything outside GitHub's own character set are refused outright.
+REPO_FULL_NAME = r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/(?!\.{1,2}$)[A-Za-z0-9._-]{1,100}$"
+
+
 class GitHubImportSerializer(serializers.Serializer):
     workspace = serializers.IntegerField()
-    github_repo_id = serializers.IntegerField()
-    full_name = serializers.RegexField(regex=r"^[\w.-]+/[\w.-]+$", max_length=255)
+    github_repo_id = serializers.IntegerField(min_value=1)
+    full_name = serializers.RegexField(regex=REPO_FULL_NAME, max_length=140)
     import_issues = serializers.BooleanField(required=False, default=True)
 
 
 class GitHubRepositoryLinkCreateSerializer(serializers.Serializer):
-    github_repo_id = serializers.IntegerField()
-    full_name = serializers.RegexField(regex=r"^[\w.-]+/[\w.-]+$", max_length=255)
+    github_repo_id = serializers.IntegerField(min_value=1)
+    full_name = serializers.RegexField(regex=REPO_FULL_NAME, max_length=140)
 
 
 class GitHubPullRequestSerializer(serializers.ModelSerializer):

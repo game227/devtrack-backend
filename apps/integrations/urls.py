@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     GitHubCallbackView,
+    GitHubCompleteView,
     GitHubConnectView,
     GitHubDisconnectView,
     GitHubImportView,
@@ -16,6 +17,7 @@ from .views import (
 urlpatterns = [
     path("github/connect/", GitHubConnectView.as_view(), name="github-connect"),
     path("github/callback/", GitHubCallbackView.as_view(), name="github-callback"),
+    path("github/complete/", GitHubCompleteView.as_view(), name="github-complete"),
     path("github/status/", GitHubStatusView.as_view(), name="github-status"),
     path("github/disconnect/", GitHubDisconnectView.as_view(), name="github-disconnect"),
     path("github/repos/", GitHubRepoListView.as_view(), name="github-repo-list"),

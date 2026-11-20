@@ -1,0 +1,85 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static admin_filters devtrack_admin %}
+{% comment %}
+  Django's admin index with DevTrack's overview on top: the headline figures, then every issue in the
+  system on the line, one station per status (each a link to that status's list).
+{% endcomment %}
+
+{% block extrastyle %}{{ block.super }}<link rel="stylesheet" href="{% static "admin/css/dashboard.css" %}" {% csp_nonce_attr %}>{% endblock %}
+
+{% block coltype %}colMS{% endblock %}
+
+{% block bodyclass %}{{ block.super }} dashboard{% endblock %}
+
+{% block nav-breadcrumbs %}{% endblock %}
+
+{% block nav-sidebar %}{% endblock %}
+
+{% block content %}
+{% devtrack_overview as overview %}
+<section class="dt-overview" aria-label="{% translate 'Overview' %}">
+  <ul class="dt-figures">
+    {% for figure in overview.figures %}
+    <li class="dt-figure">
+      {% if figure.url %}<a href="{{ figure.url }}">{% else %}<span>{% endif %}
+        <span class="dt-figure-label">{{ figure.label }}</span>
+        <span class="dt-figure-value">{{ figure.value }}</span>
+        <span class="dt-figure-note">{{ figure.note }}</span>
+      {% if figure.url %}</a>{% else %}</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+
+  <div class="dt-line-card">
+    <h2 class="dt-line-title">Issues on the line</h2>
+    <ol class="dt-line">
+      {% for station in overview.stations %}
+      <li class="dt-station dt-st-{{ station.key }}">
+        {% if station.url %}<a href="{{ station.url }}">{% else %}<span>{% endif %}
+          <span class="dt-count">{{ station.count }}</span>
+          <span class="dt-dot" aria-hidden="true"></span>
+          <span class="dt-label">{{ station.label }}</span>
+        {% if station.url %}</a>{% else %}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+  </div>
+</section>
+
+<div id="content-main" class="app-list">
+  {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
+</div>
+{% endblock %}
+
+{% block sidebar %}
+<div id="content-related">
+    <div class="module" id="recent-actions-module">
+        <h2>{% translate 'Recent actions' %}</h2>
+        <h3>{% translate 'My actions' %}</h3>
+            {% load log %}
+            {% get_admin_log 10 as admin_log for_user user %}
+            {% if not admin_log %}
+            <p>{% translate 'None available' %}</p>
+            {% else %}
+            <ul class="actionlist">
+            {% for entry in admin_log %}
+            <li class="{% if entry.is_addition %}addlink{% endif %}{% if entry.is_change %}changelink{% endif %}{% if entry.is_deletion %}deletelink{% endif %}">
+                <span class="visually-hidden">{% if entry.is_addition %}{% translate 'Added:' %}{% elif entry.is_change %}{% translate 'Changed:' %}{% elif entry.is_deletion %}{% translate 'Deleted:' %}{% endif %}</span>
+                {% if entry.is_deletion or not entry.get_admin_url %}
+                    {{ entry.object_repr|to_object_display_value }}
+                {% else %}
+                    <a href="{{ entry.get_admin_url }}">{{ entry.object_repr|to_object_display_value }}</a>
+                {% endif %}
+                <br>
+                {% if entry.content_type %}
+                    <span class="mini quiet">{% filter capfirst %}{{ entry.content_type.name }}{% endfilter %}</span>
+                {% else %}
+                    <span class="mini quiet">{% translate 'Unknown content' %}</span>
+                {% endif %}
+            </li>
+            {% endfor %}
+            </ul>
+            {% endif %}
+    </div>
+</div>
+{% endblock %}

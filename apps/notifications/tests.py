@@ -24,6 +24,7 @@ class NotificationSignalTests(TestCase):
         )
         self.workspace = Workspace.objects.create(name="NWS", owner=self.reporter)
         Membership.objects.create(workspace=self.workspace, user=self.reporter, role=Membership.Role.OWNER)
+        Membership.objects.create(workspace=self.workspace, user=self.assignee, role=Membership.Role.MEMBER)
         self.project = Project.objects.create(workspace=self.workspace, name="P", owner=self.reporter)
 
     def test_assigning_an_issue_notifies_the_assignee(self):
@@ -68,12 +69,17 @@ class NotificationSignalTests(TestCase):
         )
         self.assertFalse(Notification.objects.filter(recipient=self.assignee, verb="commented").exists())
 
-    def test_being_added_to_a_workspace_notifies_the_new_member(self):
+    def test_being_invited_to_a_workspace_notifies_the_invitee(self):
+        from apps.workspaces.models import Invitation
+
         newcomer = User.objects.create_user(username="ncomer", email="ncomer@example.com", password="pw")
-        Membership.objects.create(workspace=self.workspace, user=newcomer, role=Membership.Role.MEMBER)
+        Invitation.objects.create(workspace=self.workspace, user=newcomer, invited_by=self.reporter)
         self.assertTrue(
             Notification.objects.filter(recipient=newcomer, verb="workspace_invited").exists()
         )
+        # Accepting (becoming a member) does not notify a second time.
+        Membership.objects.create(workspace=self.workspace, user=newcomer, role=Membership.Role.MEMBER)
+        self.assertEqual(Notification.objects.filter(recipient=newcomer).count(), 1)
 
     def test_workspace_owner_membership_does_not_notify(self):
         # The owner's own Membership row is created at workspace-creation time;
@@ -82,6 +88,7 @@ class NotificationSignalTests(TestCase):
 
     def test_being_added_to_a_project_notifies_the_new_member(self):
         newcomer = User.objects.create_user(username="pncomer", email="pncomer@example.com", password="pw")
+        Membership.objects.create(workspace=self.workspace, user=newcomer, role=Membership.Role.MEMBER)
         ProjectMember.objects.create(project=self.project, user=newcomer, role="member")
         self.assertTrue(
             Notification.objects.filter(recipient=newcomer, verb="project_member_added").exists()
@@ -135,9 +142,36 @@ class NotificationActorTests(TestCase):
         # _actor models "whoever performed the change" in general (the GitHub PR-merge handler
         # sets it to a resolved GitHub author, for instance) — exercised directly at the model
         # layer since the issue-detail API itself now only lets the reporter make this change
-        # (IsIssueReporter), so `other` reassigning it could no longer happen through the view.
+        # (CanEditIssue), so `other` reassigning it could no longer happen through the view.
         issue.assignee = reporter
         issue._actor = other
         issue.save()
 
         self.assertTrue(Notification.objects.filter(recipient=reporter, verb="issue_assigned").exists())
+
+
+class NotificationContextTests(TestCase):
+    def test_a_comment_notification_names_the_author_and_the_issue(self):
+        from django.contrib.contenttypes.models import ContentType
+
+        from apps.comments.models import Comment
+        from apps.issues.models import Issue
+        from apps.projects.models import Project
+        from apps.workspaces.models import Membership, Workspace
+
+        from .models import Notification
+        from .serializers import NotificationSerializer
+
+        User = get_user_model()
+        me = User.objects.create_user(username="nc-me", email="ncme@example.com", password="pw")
+        alex = User.objects.create_user(username="nc-alex", email="ncalex@example.com", password="pw")
+        workspace = Workspace.objects.create(name="NC", owner=me)
+        Membership.objects.create(workspace=workspace, user=me, role="owner")
+        issue = Issue.objects.create(project=Project.objects.create(workspace=workspace, name="P", owner=me), title="Fix login", reporter=me)
+        comment = Comment.objects.create(content_type=ContentType.objects.get_for_model(Issue), object_id=issue.pk, author=alex, body="On it")
+        data = NotificationSerializer(Notification.objects.create(recipient=me, verb="commented", target=comment)).data
+        self.assertEqual(data["actor"], "nc-alex")
+        self.assertEqual(data["issue"], {"id": issue.pk, "number": issue.number, "title": "Fix login"})
+        data = NotificationSerializer(Notification.objects.create(recipient=me, verb="issue_assigned", target=issue)).data
+        self.assertIsNone(data["actor"])
+        self.assertEqual(data["issue"]["title"], "Fix login")

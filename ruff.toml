@@ -1,0 +1,22 @@
+# Lint only (no auto-formatting of the existing code base). Includes flake8-bandit ("S"): static
+# security checks such as hard-coded secrets, weak hashes, unsafe deserialization, `requests` without a timeout.
+line-length = 130
+target-version = "py314"
+extend-exclude = ["venv", "staticfiles", "media", "migrations"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "S", "DJ012"]
+ignore = [
+    "E501",   # long lines: the code base already uses them for readability in tables/tests
+    "B904",   # `raise ... from err` inside except: DRF idiom here is raising ValidationError directly
+    "S101",   # assert is fine in tests (and these rules are re-enabled below for application code)
+]
+
+[lint.per-file-ignores]
+"**/tests.py" = ["S105", "S106", "S311", "S108", "B018", "B017"]
+"**/test_*.py" = ["S105", "S106", "S107", "S311", "S108", "B018", "B017"]
+"config/settings/*.py" = ["F403", "F405"]  # prod/dev/test extend base with `import *` by design
+"config/settings/test.py" = ["S105", "S106"]
+
+[lint.isort]
+known-first-party = ["apps", "config"]

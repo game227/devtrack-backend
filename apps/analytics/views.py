@@ -12,8 +12,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.activities.models import Activity
-from apps.activities.queries import project_timeline_queryset
 from apps.activities.serializers import ActivitySerializer
+from apps.common.lookup import parse_id
 from apps.cycles.models import Cycle
 from apps.issues.models import Issue
 from apps.projects.models import Label, Project
@@ -35,7 +35,7 @@ class DashboardView(APIView):
         workspace_id = request.query_params.get("workspace")
         if not workspace_id:
             raise ValidationError({"workspace": "This query parameter is required."})
-        workspace = get_object_or_404(Workspace, pk=workspace_id)
+        workspace = get_object_or_404(Workspace, pk=parse_id(workspace_id, "workspace"))
         if get_membership(request.user, workspace) is None:
             raise PermissionDenied("You are not a member of this workspace.")
 
@@ -71,6 +71,7 @@ class DashboardView(APIView):
         upcoming_deadlines = [
             {
                 "id": issue.id,
+                "number": issue.number,
                 "title": issue.title,
                 "project": {"id": issue.project_id, "name": issue.project.name},
                 "due_date": issue.due_date,
@@ -126,7 +127,7 @@ class SearchView(APIView):
         if not query:
             raise ValidationError({"q": "This query parameter is required."})
 
-        workspace = get_object_or_404(Workspace, pk=workspace_id)
+        workspace = get_object_or_404(Workspace, pk=parse_id(workspace_id, "workspace"))
         if get_membership(request.user, workspace) is None:
             raise PermissionDenied("You are not a member of this workspace.")
 
@@ -141,10 +142,11 @@ class SearchView(APIView):
             {
                 "projects": [{"id": p.id, "name": p.name, "status": p.status} for p in projects],
                 "issues": [
-                    {"id": i.id, "title": i.title, "type": i.type, "status": i.status} for i in issues
+                    {"id": i.id, "number": i.number, "title": i.title, "type": i.type, "status": i.status}
+                    for i in issues
                 ],
                 "users": [{"id": u.id, "username": u.username, "avatar": _avatar_url(u)} for u in users],
-                "labels": [{"id": l.id, "name": l.name, "color": l.color} for l in labels],
+                "labels": [{"id": lb.id, "name": lb.name, "color": lb.color} for lb in labels],
                 "cycles": [{"id": c.id, "name": c.name, "project": c.project_id} for c in cycles],
             }
         )
@@ -179,7 +181,7 @@ class DeveloperAnalyticsView(APIView):
         workspace_id = request.query_params.get("workspace")
         if not workspace_id:
             raise ValidationError({"workspace": "This query parameter is required."})
-        workspace = get_object_or_404(Workspace, pk=workspace_id)
+        workspace = get_object_or_404(Workspace, pk=parse_id(workspace_id, "workspace"))
 
         if get_membership(request.user, workspace) is None:
             raise PermissionDenied("You are not a member of this workspace.")

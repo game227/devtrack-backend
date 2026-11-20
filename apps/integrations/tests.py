@@ -106,7 +106,7 @@ class WebhookTests(TestCase):
                 "commits": [
                     {
                         "id": "abc123",
-                        "message": f"fix it, fixes #{self.issue.id}",
+                        "message": f"fix it, fixes #{self.issue.number}",
                         "url": "https://x/commit/abc123",
                         "author": {"name": "Dev", "username": "dev"},
                     }
@@ -123,7 +123,7 @@ class WebhookTests(TestCase):
             "commits": [
                 {
                     "id": "dup1",
-                    "message": f"fixes #{self.issue.id}",
+                    "message": f"fixes #{self.issue.number}",
                     "url": "https://x/commit/dup1",
                     "author": {"name": "Dev", "username": "dev"},
                 }
@@ -134,23 +134,31 @@ class WebhookTests(TestCase):
         self.assertEqual(GitHubCommit.objects.filter(sha="dup1").count(), 1)
 
     def test_push_scopes_issue_matching_to_linked_project(self):
-        response = self.post_event(
-            "push",
-            {
-                "repository": {"id": 111},
-                "commits": [
-                    {
-                        "id": "scoped1",
-                        "message": f"fixes #{self.other_issue.id}",
-                        "url": "https://x/commit/scoped1",
-                        "author": {"name": "Dev", "username": "dev"},
-                    }
-                ],
-            },
-        )
-        self.assertEqual(response.status_code, 200)
-        commit = GitHubCommit.objects.get(sha="scoped1")
-        self.assertEqual(commit.issues.count(), 0)
+        # Numbers are per project, so another project has its own #1 (and here a #2 that the linked
+        # project does not have). A commit pushed to the linked repo may only ever touch the linked project.
+        foreign_second = Issue.objects.create(project=self.other_project, title="Second elsewhere", reporter=self.user)
+        self.assertEqual((self.issue.number, self.other_issue.number, foreign_second.number), (1, 1, 2))
+
+        def push(sha, number):
+            response = self.post_event(
+                "push",
+                {
+                    "repository": {"id": 111},
+                    "commits": [
+                        {
+                            "id": sha,
+                            "message": f"fixes #{number}",
+                            "url": f"https://x/commit/{sha}",
+                            "author": {"name": "Dev", "username": "dev"},
+                        }
+                    ],
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            return list(GitHubCommit.objects.get(sha=sha).issues.all())
+
+        self.assertEqual(push("scoped1", foreign_second.number), [])  # #2 exists only in the other project
+        self.assertEqual(push("scoped2", self.issue.number), [self.issue])  # #1 is the linked project's own
 
     def test_push_malformed_commit_does_not_500(self):
         response = self.post_event(
@@ -168,7 +176,7 @@ class WebhookTests(TestCase):
                 "pull_request": {
                     "id": 555,
                     "number": 7,
-                    "title": f"Fix, closes #{self.issue.id}",
+                    "title": f"Fix, closes #{self.issue.number}",
                     "body": "",
                     "state": "closed",
                     "merged": True,
@@ -197,7 +205,7 @@ class WebhookTests(TestCase):
                 "pull_request": {
                     "id": 556,
                     "number": 8,
-                    "title": f"WIP #{self.issue.id}",
+                    "title": f"WIP #{self.issue.number}",
                     "body": "",
                     "state": "open",
                     "merged": False,
@@ -216,6 +224,7 @@ class WebhookTests(TestCase):
         GitHubAccount.objects.create(
             user=author, github_user_id=999, github_username="octocat", access_token="tok"
         )
+        Membership.objects.create(workspace=self.project.workspace, user=author, role="member")
         self.post_event(
             "pull_request",
             {
@@ -224,12 +233,12 @@ class WebhookTests(TestCase):
                 "pull_request": {
                     "id": 557,
                     "number": 9,
-                    "title": f"Fix, closes #{self.issue.id}",
+                    "title": f"Fix, closes #{self.issue.number}",
                     "body": "",
                     "state": "closed",
                     "merged": True,
                     "html_url": "https://x/pull/9",
-                    "user": {"login": "octocat"},
+                    "user": {"login": "octocat", "id": 999},
                     "head": {"ref": "fix"},
                     "base": {"ref": "main"},
                 },
@@ -349,10 +358,15 @@ class GitHubFlowBase(TestCase):
 
 
 @override_settings(GITHUB_WEBHOOK_CALLBACK_URL="http://localhost:8000/api/v1/integrations/github/webhook/")
+def github_repo(repo_id, full_name):
+    """GitHub's answer for a repository the caller's token can read."""
+    return patch("apps.integrations.views.services.get_repo", return_value={"id": repo_id, "full_name": full_name})
+
+
 class LinkWithoutPublicWebhookTests(GitHubFlowBase):
     def test_linking_works_when_the_server_is_not_publicly_reachable(self):
         project = Project.objects.create(workspace=self.workspace, name="P", owner=self.user)
-        with patch("apps.integrations.views.services.create_webhook") as create_webhook:
+        with github_repo(77, "me/repo"), patch("apps.integrations.views.services.create_webhook") as create_webhook:
             response = self.client.post(
                 reverse("project-github-link", kwargs={"project_id": project.id}),
                 {"github_repo_id": 77, "full_name": "me/repo"},
@@ -364,12 +378,15 @@ class LinkWithoutPublicWebhookTests(GitHubFlowBase):
         self.assertEqual(response.data["webhook_warning"]["code"], "not_public_url")
         self.assertTrue(GitHubRepositoryLink.objects.filter(project=project, webhook_id__isnull=True).exists())
 
-    @override_settings(GITHUB_WEBHOOK_CALLBACK_URL="https://devtrack.example.com/api/v1/integrations/github/webhook/")
+    @override_settings(
+        GITHUB_WEBHOOK_CALLBACK_URL="https://devtrack.example.com/api/v1/integrations/github/webhook/",
+        GITHUB_WEBHOOK_SECRET="whsec",
+    )
     def test_a_rejected_webhook_still_links_and_reports_githubs_reason(self):
         from .services import GitHubAPIError
 
         project = Project.objects.create(workspace=self.workspace, name="P2", owner=self.user)
-        with patch("apps.integrations.views.services.create_webhook", side_effect=GitHubAPIError("GitHub refused: Not Found")):
+        with github_repo(78, "me/other"), patch("apps.integrations.views.services.create_webhook", side_effect=GitHubAPIError("GitHub refused: Not Found")):
             response = self.client.post(
                 reverse("project-github-link", kwargs={"project_id": project.id}),
                 {"github_repo_id": 78, "full_name": "me/other"},
@@ -378,10 +395,13 @@ class LinkWithoutPublicWebhookTests(GitHubFlowBase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["webhook_warning"], {"code": "github_rejected", "detail": "GitHub refused: Not Found"})
 
-    @override_settings(GITHUB_WEBHOOK_CALLBACK_URL="https://devtrack.example.com/api/v1/integrations/github/webhook/")
+    @override_settings(
+        GITHUB_WEBHOOK_CALLBACK_URL="https://devtrack.example.com/api/v1/integrations/github/webhook/",
+        GITHUB_WEBHOOK_SECRET="whsec",
+    )
     def test_a_public_server_installs_the_webhook(self):
         project = Project.objects.create(workspace=self.workspace, name="P3", owner=self.user)
-        with patch("apps.integrations.views.services.create_webhook", return_value={"id": 4242}):
+        with github_repo(79, "me/third"), patch("apps.integrations.views.services.create_webhook", return_value={"id": 4242}):
             response = self.client.post(
                 reverse("project-github-link", kwargs={"project_id": project.id}),
                 {"github_repo_id": 79, "full_name": "me/third"},
@@ -389,6 +409,85 @@ class LinkWithoutPublicWebhookTests(GitHubFlowBase):
             )
         self.assertTrue(response.data["webhook_installed"])
         self.assertIsNone(response.data["webhook_warning"])
+
+
+class LinkVerificationTests(GitHubFlowBase):
+    """The repository id and name in a link request are claims; GitHub decides whether they are true."""
+
+    def setUp(self):
+        super().setUp()
+        self.project = Project.objects.create(workspace=self.workspace, name="Verify", owner=self.user)
+        self.url = reverse("project-github-link", kwargs={"project_id": self.project.id})
+
+    def link(self, repo_id, full_name):
+        return self.client.post(self.url, {"github_repo_id": repo_id, "full_name": full_name}, format="json")
+
+    def test_a_repository_id_that_does_not_belong_to_the_name_is_refused(self):
+        with github_repo(1000, "me/mine"):
+            response = self.link(424242, "me/mine")  # someone else's repository id, paired with a repo I can read
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(GitHubRepositoryLink.objects.exists())
+
+    def test_a_repository_the_token_cannot_read_is_refused(self):
+        from .services import GitHubAPIError
+
+        with patch("apps.integrations.views.services.get_repo", side_effect=GitHubAPIError("Could not read that repository: Not Found")):
+            response = self.link(5, "someone/private")
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(GitHubRepositoryLink.objects.exists())
+
+    def test_the_stored_name_is_githubs_not_the_clients(self):
+        with github_repo(31, "Me/Repo"):
+            response = self.link(31, "me/repo")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(GitHubRepositoryLink.objects.get().full_name, "Me/Repo")
+
+    def test_a_repository_can_only_be_linked_once(self):
+        with github_repo(31, "me/repo"):
+            self.assertEqual(self.link(31, "me/repo").status_code, 201)
+            other = Project.objects.create(workspace=self.workspace, name="Again", owner=self.user)
+            again = self.client.post(
+                reverse("project-github-link", kwargs={"project_id": other.id}),
+                {"github_repo_id": 31, "full_name": "me/repo"},
+                format="json",
+            )
+        self.assertEqual(again.status_code, 400)
+
+    def test_malformed_repository_names_never_reach_github(self):
+        with patch("apps.integrations.views.services.get_repo") as get_repo:
+            for bad in ("../..", "a/..", "a/.", "a/b/c", "a b/c", "-a/b", "a/b?x=1", "a/b#frag", "/etc/passwd", "a/" + "b" * 101):
+                self.assertEqual(self.link(1, bad).status_code, 400, bad)
+            get_repo.assert_not_called()
+
+    @override_settings(GITHUB_WEBHOOK_CALLBACK_URL="https://devtrack.example.com/hook/", GITHUB_WEBHOOK_SECRET="")
+    def test_no_webhook_is_created_without_a_secret(self):
+        with github_repo(31, "me/repo"), patch("apps.integrations.views.services.create_webhook") as create_webhook:
+            response = self.link(31, "me/repo")
+        self.assertEqual(response.status_code, 201)
+        create_webhook.assert_not_called()  # an unsigned hook would only ever deliver events we reject
+        self.assertEqual(response.data["webhook_warning"]["code"], "github_rejected")
+
+
+class SyncThrottleTests(GitHubFlowBase):
+    def test_a_user_cannot_burn_the_github_quota_with_endless_manual_syncs(self):
+        from django.core.cache import cache
+
+        from apps.accounts.throttling import GithubSyncRateThrottle
+
+        cache.clear()
+        self.addCleanup(cache.clear)
+        original = GithubSyncRateThrottle.THROTTLE_RATES
+        GithubSyncRateThrottle.THROTTLE_RATES = {**original, "github_sync": "2/min"}
+        self.addCleanup(setattr, GithubSyncRateThrottle, "THROTTLE_RATES", original)
+
+        project = Project.objects.create(workspace=self.workspace, name="S", owner=self.user)
+        GitHubRepositoryLink.objects.create(project=project, github_repo_id=5, full_name="me/s", webhook_id=None, connected_by=self.user)
+        url = reverse("project-github-sync", kwargs={"project_id": project.id})
+        with patch("apps.integrations.views.services.list_repo_pulls", return_value=[]), \
+             patch("apps.integrations.views.services.list_repo_commits", return_value=[]), \
+             patch("apps.integrations.views.services.list_recent_issues", return_value=[]):
+            codes = [self.client.post(url).status_code for _ in range(4)]
+        self.assertEqual(codes, [200, 200, 429, 429])
 
 
 class IsPublicUrlTests(TestCase):
@@ -415,7 +514,9 @@ class ImportFromGitHubTests(GitHubFlowBase):
 
     def post(self, **overrides):
         payload = {"workspace": self.workspace.id, "github_repo_id": 900, "full_name": "me/repo", **overrides}
-        with patch("apps.integrations.views.services.get_repo", return_value={"name": "repo", "description": "A repo", "html_url": "https://github.com/me/repo"}), \
+        repo = {"id": payload["github_repo_id"], "full_name": payload["full_name"], "name": "repo",
+                "description": "A repo", "html_url": "https://github.com/me/repo"}
+        with patch("apps.integrations.views.services.get_repo", return_value=repo), \
              patch("apps.integrations.views.services.list_repo_issues", return_value=GITHUB_ISSUES):
             return self.client.post(self.url, payload, format="json")
 
@@ -439,6 +540,23 @@ class ImportFromGitHubTests(GitHubFlowBase):
         self.assertEqual(dark.github_url, "https://github.com/me/repo/issues/2")
         self.assertEqual({label.name for label in dark.labels.all()}, {"enhancement", "ui"})
         self.assertTrue(Label.objects.filter(workspace=self.workspace, name="bug", color="#d73a4a").exists())
+
+    def test_imported_issues_keep_githubs_numbers_and_new_ones_continue_after_them(self):
+        response = self.post()
+        project = Project.objects.get(pk=response.data["project"]["id"])
+        self.assertEqual(sorted(project.issues.values_list("number", flat=True)), [1, 2])
+        project.refresh_from_db()
+        self.assertEqual(project.issue_counter, 2)
+        fresh = Issue.objects.create(project=project, title="Made in DevTrack", reporter=self.user)
+        self.assertEqual(fresh.number, 3)
+
+    def test_a_repository_id_that_does_not_match_is_refused(self):
+        with patch("apps.integrations.views.services.get_repo", return_value={"id": 111, "full_name": "me/repo", "name": "repo"}):
+            response = self.client.post(
+                self.url, {"workspace": self.workspace.id, "github_repo_id": 222, "full_name": "me/repo"}, format="json"
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(GitHubRepositoryLink.objects.exists())
 
     def test_issues_can_be_skipped(self):
         response = self.post(import_issues=False)
@@ -476,15 +594,16 @@ class ImportFromGitHubTests(GitHubFlowBase):
 class GitHubNumberMatchingTests(GitHubFlowBase):
     def test_hash_references_use_githubs_numbering_in_imported_projects(self):
         project = Project.objects.create(workspace=self.workspace, name="Imported", owner=self.user)
-        imported = Issue.objects.create(project=project, title="From GH", reporter=self.user, github_number=12)
-        native = Issue.objects.create(project=project, title="Native", reporter=self.user)  # its DevTrack id may be anything
+        imported = Issue.objects.create(project=project, title="From GH", reporter=self.user, number=12, github_number=12)
+        native = Issue.objects.create(project=project, title="Native", reporter=self.user)  # numbered by DevTrack
         link = GitHubRepositoryLink.objects.create(
             project=project, github_repo_id=1, full_name="me/imp", webhook_id=None, connected_by=self.user
         )
         from .views import _match_issues
 
         self.assertEqual(_match_issues(project, {12}), [imported])
-        self.assertEqual(_match_issues(project, {native.id}), [native])  # falls back to the DevTrack id
+        self.assertEqual(_match_issues(project, {native.number}), [native])
+        self.assertEqual(_match_issues(project, {native.id + 1000}), [])  # a DevTrack id is not a reference
         self.assertEqual(_match_issues(project, set()), [])
         self.assertIsNotNone(link)
 
@@ -493,7 +612,7 @@ class ManualSyncTests(GitHubFlowBase):
     def setUp(self):
         super().setUp()
         self.project = Project.objects.create(workspace=self.workspace, name="Sync", owner=self.user)
-        self.issue = Issue.objects.create(project=self.project, title="Fix me", reporter=self.user, github_number=7)
+        self.issue = Issue.objects.create(project=self.project, title="Fix me", reporter=self.user, number=7, github_number=7)
         GitHubRepositoryLink.objects.create(
             project=self.project, github_repo_id=321, full_name="me/sync", webhook_id=None, connected_by=self.user
         )
@@ -585,7 +704,7 @@ class GitHubWorkflowTests(TestCase):
         GitHubAccount.objects.create(user=self.dev, github_user_id=902, github_username="dev-gh", access_token="t")
         self.project = Project.objects.create(workspace=self.workspace, name="P", owner=self.owner)
         self.issue = Issue.objects.create(
-            project=self.project, title="Work", reporter=self.owner, status=Issue.Status.TODO, github_number=5
+            project=self.project, title="Work", reporter=self.owner, status=Issue.Status.TODO, number=5, github_number=5
         )
         self.link = GitHubRepositoryLink.objects.create(
             project=self.project, github_repo_id=777, full_name="acme/wf", webhook_id=1, connected_by=self.owner
@@ -621,8 +740,9 @@ class GitHubWorkflowTests(TestCase):
     def push(self, message="Start on #5", ref="refs/heads/feat"):
         return self.post_event(
             "push",
-            {"ref": ref, "commits": [{"id": "a" * 40, "message": message, "url": "https://x/c/a",
-                                       "timestamp": "2026-09-21T10:30:00+00:00", "author": {"username": "dev-gh", "name": "Dev"}}]},
+            {"ref": ref, "sender": {"login": "dev-gh", "id": 902},
+             "commits": [{"id": "a" * 40, "message": message, "url": "https://x/c/a",
+                          "timestamp": "2026-09-21T10:30:00+00:00", "author": {"username": "dev-gh", "name": "Dev"}}]},
         )
 
     def test_a_commit_mentioning_an_issue_starts_it_and_credits_the_developer(self):
@@ -688,7 +808,7 @@ class GitHubWorkflowTests(TestCase):
 
     def issues_event(self, action, state, number=5, **extra):
         return self.post_event("issues", {"action": action, "issue": {"number": number, "state": state, **extra},
-                                          "sender": {"login": "dev-gh"}})
+                                          "sender": {"login": "dev-gh", "id": 902}})
 
     def test_closing_the_github_issue_finishes_the_devtrack_issue(self):
         self.issues_event("closed", "closed")

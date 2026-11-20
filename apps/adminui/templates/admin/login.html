@@ -1,0 +1,99 @@
+{% extends "admin/base_site.html" %}
+{% load i18n %}
+{% comment %}
+  Sign-in, laid out like the web app's: the form on one side, the line of stations on the other. The
+  form itself (fields, names, CSRF, "next") is Django's own login form, unchanged.
+{% endcomment %}
+
+{% block title %}{% if form.errors %}{% translate "Error:" %} {% endif %}{{ block.super }}{% endblock %}
+{% block extrastyle %}{{ block.super }}{% csp_nonce_attr form.media %}{% endblock %}
+
+{% block bodyclass %}{{ block.super }} login dt-login{% endblock %}
+
+{% block usertools %}{% endblock %}
+
+{% block nav-global %}{% endblock %}
+
+{% block nav-sidebar %}{% endblock %}
+
+{% block content_title %}{% endblock %}
+
+{% block nav-breadcrumbs %}{% endblock %}
+
+{% block content %}
+<div class="dt-login-grid">
+  <div class="dt-login-panel">
+    <h1>{% translate 'Log in' %}</h1>
+    <p class="dt-lead">{{ site_header|default:_('Django administration') }} admin, for staff accounts.</p>
+
+    {% if form.errors and not form.non_field_errors %}
+    <p class="errornote">
+    {% blocktranslate count counter=form.errors.items|length %}Please correct the error below.{% plural %}Please correct the errors below.{% endblocktranslate %}
+    </p>
+    {% endif %}
+
+    {% if form.non_field_errors %}
+    {% for error in form.non_field_errors %}
+    <p class="errornote">
+        {{ error }}
+    </p>
+    {% endfor %}
+    {% endif %}
+
+    <div id="content-main">
+
+    {% if user.is_authenticated %}
+    <p class="errornote">
+    {% blocktranslate trimmed %}
+        You are authenticated as {{ username }}, but are not authorized to
+        access this page. Would you like to login to a different account?
+    {% endblocktranslate %}
+    </p>
+    {% endif %}
+
+    <form action="{{ app_path }}" method="post" id="login-form">{% csrf_token %}
+      <div class="form-row">
+        {{ form.username.errors }}
+        {{ form.username.label_tag }} {{ form.username }}
+      </div>
+      <div class="form-row">
+        {{ form.password.errors }}
+        {{ form.password.label_tag }} {{ form.password }}
+        <input type="hidden" name="next" value="{{ next }}">
+      </div>
+      {% if form.otp %}
+      <div class="form-row">
+        {{ form.otp.errors }}
+        {{ form.otp.label_tag }} {{ form.otp }}
+        <p class="help">{{ form.otp.help_text }}</p>
+      </div>
+      {% endif %}
+      {% url 'admin_password_reset' as password_reset_url %}
+      {% if password_reset_url %}
+      <div class="password-reset-link">
+        <a href="{{ password_reset_url }}">{% translate 'Forgotten your login credentials?' %}</a>
+      </div>
+      {% endif %}
+      <div class="submit-row">
+        <input type="submit" value="{% translate 'Log in' %}">
+      </div>
+    </form>
+
+    </div>
+  </div>
+
+  <div class="dt-login-art" aria-hidden="true">
+    <div class="dt-corners">
+    <div class="dt-device">
+    <ol class="dt-vline">
+      <li class="dt-st-backlog"><span class="dt-dot"></span>Backlog</li>
+      <li class="dt-st-todo"><span class="dt-dot"></span>Todo</li>
+      <li class="dt-st-in_progress"><span class="dt-dot"></span>In progress</li>
+      <li class="dt-st-in_review"><span class="dt-dot"></span>In review</li>
+      <li class="dt-st-done"><span class="dt-dot"></span>Done</li>
+    </ol>
+    </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

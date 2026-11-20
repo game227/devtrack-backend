@@ -5,6 +5,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.accounts.throttling import MemberAddRateThrottle
+from apps.common.lookup import body_value, parse_id
 from apps.workspaces.models import Workspace
 from apps.workspaces.permissions import get_membership
 
@@ -31,14 +33,25 @@ class TeamListCreateView(generics.ListCreateAPIView):
         workspace_id = self.request.query_params.get("workspace")
         if not workspace_id:
             raise ValidationError({"workspace": "This query parameter is required."})
-        workspace = get_object_or_404(Workspace, pk=workspace_id)
+        workspace = get_object_or_404(Workspace, pk=parse_id(workspace_id, "workspace"))
         _require_workspace_member(self.request.user, workspace)
         return Team.objects.filter(workspace=workspace)
 
+    def get_target_workspace(self):
+        if not hasattr(self, "_target_workspace"):
+            workspace = get_object_or_404(Workspace, pk=parse_id(body_value(self.request, "workspace"), "workspace"))
+            _require_workspace_admin(self.request.user, workspace)
+            self._target_workspace = workspace
+        return self._target_workspace
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        if self.request.method == "POST":
+            context["workspace"] = self.get_target_workspace()
+        return context
+
     def perform_create(self, serializer):
-        workspace = get_object_or_404(Workspace, pk=self.request.data.get("workspace"))
-        _require_workspace_admin(self.request.user, workspace)
-        team = serializer.save(workspace=workspace)
+        team = serializer.save(workspace=self.get_target_workspace())
         TeamMembership.objects.create(team=team, user=self.request.user)
 
 
@@ -68,6 +81,10 @@ class TeamMembersView(generics.ListCreateAPIView):
 
     def get_serializer_class(self):
         return TeamMembershipSerializer
+
+    def get_throttles(self):
+        throttles = super().get_throttles()
+        return throttles + [MemberAddRateThrottle()] if self.request.method == "POST" else throttles
 
     def get_queryset(self):
         team = self.get_team()

@@ -66,6 +66,9 @@ services:
         sync: false
       - key: DEFAULT_FROM_EMAIL
         value: onboarding@resend.dev
+      # Contact address shown in the app; also the Reply-To of every email.
+      - key: SUPPORT_EMAIL
+        value: safary12800@gmail.com
       # Telegram bot service (below): the backend only needs the bot's @username and URL.
       - key: TELEGRAM_BOT_USERNAME
         sync: false
@@ -141,17 +144,20 @@ services:
     routes:
       - source: /*
         destination: /index.html
-    # 'unsafe-inline' on script-src is needed for the pre-paint theme script
-    # in index.html (see that file's comment); everything else is locked to
-    # the app's own origin, the backend API, and Google Fonts.
+    # script-src allows the one inline script (the pre-paint theme script in index.html) by its
+    # SHA-256 hash instead of 'unsafe-inline', so an injected inline script cannot run. The hash only
+    # matches those exact bytes: the frontend's CI runs `npm run check:csp` and fails if index.html
+    # changes without this value being updated. Everything else is locked to the app's own origin and
+    # the backend API; the fonts are bundled with the app, so no third-party font host is allowed.
+    # (style-src keeps 'unsafe-inline': React sets inline styles.)
     headers:
       - path: /*
         name: Content-Security-Policy
         value: >-
-          default-src 'self'; script-src 'self' 'unsafe-inline';
-          style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-          font-src 'self' https://fonts.gstatic.com;
-          img-src 'self' data: https://devtrack-backend.onrender.com;
+          default-src 'self'; script-src 'self' 'sha256-FiBP/F5pflxGDghQbGaiDlNBZ9G3mrZrfGuB29NJ52s=';
+          style-src 'self' 'unsafe-inline';
+          font-src 'self';
+          img-src 'self' data: blob: https://devtrack-backend.onrender.com;
           connect-src 'self' https://devtrack-backend.onrender.com https://*.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io;
           base-uri 'self'; form-action 'self'; object-src 'none'; frame-ancestors 'none'
       - path: /*
@@ -188,3 +194,33 @@ services:
       - key: TELEGRAM_BOT_SERVICE_URL
         value: https://devtrack-telegram-bot.onrender.com
       - fromGroup: devtrack-shared-secrets
+
+  # Daily database backup: pg_dump (custom format) uploaded to an S3-compatible bucket (Cloudflare R2,
+  # S3, ...) under backups/, keeping BACKUP_RETENTION_DAYS days. See docs/BACKUP.md for restoring.
+  # 02:00 UTC = 07:00 in Tashkent.
+  - type: cron
+    name: devtrack-db-backup
+    runtime: docker
+    dockerfilePath: ./Dockerfile.backup
+    schedule: "0 2 * * *"
+    dockerCommand: python manage.py backup_database
+    plan: starter
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.prod
+      - key: SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: devtrack-db
+          property: connectionString
+      - key: BACKUP_BUCKET
+        sync: false
+      - key: BACKUP_ENDPOINT_URL
+        sync: false
+      - key: BACKUP_ACCESS_KEY
+        sync: false
+      - key: BACKUP_SECRET_KEY
+        sync: false
+      - key: BACKUP_RETENTION_DAYS
+        value: "14"

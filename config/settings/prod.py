@@ -22,9 +22,11 @@ if SENTRY_DSN:
 # with this header set — without telling Django, request.is_secure() would
 # always read False behind the proxy, breaking secure-cookie/CSRF behavior.
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-SECURE_SSL_REDIRECT = True
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
+# On by default. The only reason to turn it off is serving plain HTTP on localhost (docker-compose.yml);
+# the cookies follow it, so a deployment can never end up with HTTPS redirects but insecure cookies.
+SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=True)
+SESSION_COOKIE_SECURE = SECURE_SSL_REDIRECT
+CSRF_COOKIE_SECURE = SECURE_SSL_REDIRECT
 # HSTS is opt-in: browsers cache it and refuse plain HTTP for the whole period, so it
 # stays off (0) until the domain/TLS setup has proven stable. Ramp it up via the
 # environment, e.g. 3600 -> 86400 -> 31536000.
@@ -33,6 +35,13 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", defa
 SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
 
 PASSWORD_RESET_ASYNC = env.bool("PASSWORD_RESET_ASYNC", default=True)
+
+# JSON only. DRF's browsable API renders HTML forms for every endpoint; useful in development,
+# unnecessary attack surface (and an XSS/clickjacking target) in production.
+REST_FRAMEWORK = {
+    **REST_FRAMEWORK,  # noqa: F405
+    "DEFAULT_RENDERER_CLASSES": ("rest_framework.renderers.JSONRenderer",),
+}
 
 # Static files served directly by the app via WhiteNoise — no separate
 # static host needed at this scale.

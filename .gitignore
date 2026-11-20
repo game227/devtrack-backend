@@ -7,3 +7,7 @@ media/
 staticfiles/
 *.sqlite3
 .DS_Store
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/

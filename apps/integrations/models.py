@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings
 from django.db import models
 
@@ -20,8 +22,41 @@ class GitHubAccount(models.Model):
     connected_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+
+    class Meta:
+        verbose_name = "GitHub account"
+
     def __str__(self):
         return f"{self.user} -> github:{self.github_username}"
+
+
+class GitHubPendingConnection(models.Model):
+    """A GitHub authorization that came back from GitHub but is not linked to anyone yet.
+
+    GitHub redirects a *browser* to the callback, without any proof of which DevTrack user that browser
+    belongs to. Linking there would let anyone send a victim their own authorization link and receive the
+    victim's GitHub token on their account. So the callback only parks the result here, and the SPA in the
+    browser that started the flow claims it with that user's own credentials and a secret only that
+    browser holds (see GitHubCompleteView).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="github_pending_connections"
+    )
+    nonce_hash = models.CharField(max_length=64)
+    github_user_id = models.BigIntegerField()
+    github_username = models.CharField(max_length=255)
+    access_token = EncryptedCharField(max_length=500)
+    scope = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+    class Meta:
+        verbose_name = "pending GitHub connection"
+
+    def __str__(self):
+        return f"pending github:{self.github_username} for {self.user}"
 
 
 class GitHubRepositoryLink(models.Model):
@@ -45,6 +80,10 @@ class GitHubRepositoryLink(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+    class Meta:
+        verbose_name = "GitHub repository link"
 
     def __str__(self):
         return f"{self.project} -> {self.full_name}"
@@ -77,6 +116,7 @@ class GitHubPullRequest(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = "GitHub pull request"
         unique_together = [("repo_link", "github_pr_id")]
         ordering = ["-updated_at"]
 
@@ -98,6 +138,7 @@ class GitHubCommit(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        verbose_name = "GitHub commit"
         unique_together = [("repo_link", "sha")]
         ordering = ["-created_at"]
 

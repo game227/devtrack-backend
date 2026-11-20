@@ -35,11 +35,33 @@ class Project(models.Model):
     )
     repository_url = models.URLField(blank=True)
     tech_stack = models.JSONField(default=dict, blank=True)
+    # Highest issue number handed out so far. A counter (rather than MAX(number) + 1) means a number is
+    # never reused after its issue is deleted, so "#12" in an old commit never points at a different issue.
+    issue_counter = models.PositiveIntegerField(default=0, editable=False)
+    # Most issues a board column should hold at once, e.g. {"in_progress": 5}; the board warns beyond it.
+    wip_limits = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name
+
+
+class ProjectFavorite(models.Model):
+    """A project someone keeps at hand: it is listed in their sidebar. Personal, never shown to others."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="favorite_projects"
+    )
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="favorites")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "project"], name="unique_project_favorite")]
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"{self.user} ★ {self.project}"
 
 
 class ProjectMember(models.Model):

@@ -12,6 +12,11 @@ class TelegramConnectView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        if not (settings.TELEGRAM_LINK_SECRET and settings.TELEGRAM_BOT_USERNAME):
+            return Response(
+                {"detail": "Telegram linking is not configured on this server."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         token = sign_user_id(request.user.id, settings.TELEGRAM_LINK_SECRET)
         return Response({"deep_link": services.build_deep_link(token)})
 

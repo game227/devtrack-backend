@@ -6,7 +6,10 @@ import sys
 
 def main():
     """Run administrative tasks."""
-    os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings.dev')
+    # `manage.py test` always runs against the hermetic test settings, so a developer's .env
+    # (e.g. PASSWORD_RESET_ASYNC=true) can never change what the tests exercise.
+    default_settings = "config.settings.test" if sys.argv[1:2] == ["test"] else "config.settings.dev"
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", default_settings)
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:

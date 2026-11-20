@@ -42,6 +42,8 @@ class PasswordResetChannelTests(TestCase):
         self.client.post(self.url, {"email": self.user.email}, format="json")
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.user.email])
+        # Replies reach the team, not the sending domain.
+        self.assertEqual(mail.outbox[0].reply_to, ["safary12800@gmail.com"])
 
     def test_unknown_email_sends_nothing_but_still_returns_200(self):
         response = self.client.post(self.url, {"email": "nobody@example.com"}, format="json")
@@ -61,6 +63,12 @@ class PasswordResetLanguageTests(TestCase):
     def test_email_is_sent_in_the_requested_language(self, _send):
         self.client.post(self.url, {"email": self.user.email, "lang": "uz"}, format="json")
         self.assertEqual(mail.outbox[0].subject, "DevTrack parolini tiklash")
+        self.assertIn("/reset-password/", mail.outbox[0].body)
+
+    @patch("apps.accounts.views.telegram_services.send_message", side_effect=BotServiceError("not linked"))
+    def test_email_can_be_russian(self, _send):
+        self.client.post(self.url, {"email": self.user.email, "lang": "ru"}, format="json")
+        self.assertEqual(mail.outbox[0].subject, "Сброс пароля DevTrack")
         self.assertIn("/reset-password/", mail.outbox[0].body)
 
     @patch("apps.accounts.views.telegram_services.send_message", side_effect=BotServiceError("not linked"))
@@ -115,7 +123,7 @@ class AccountLoginThrottleTests(TestCase):
     def test_a_different_account_is_not_affected_by_another_accounts_throttling(self):
         for _ in range(3):
             self.client.post(self.url, {"username": "throttle_user", "password": "wrong"}, format="json")
-        other = User.objects.create_user(username="other_user", email="other@example.com", password="pw")
+        User.objects.create_user(username="other_user", email="other@example.com", password="pw")
         response = self.client.post(self.url, {"username": "other_user", "password": "pw"}, format="json")
         self.assertEqual(response.status_code, 200)
 

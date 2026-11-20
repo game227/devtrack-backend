@@ -1,20 +1,26 @@
 import hashlib
 import hmac
 import logging
+from datetime import timedelta
 from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import signing
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import F
+from django.db.models.functions import Greatest
 from django.shortcuts import get_object_or_404, redirect
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
+from apps.accounts.throttling import GithubSyncRateThrottle
 from apps.activities.models import Activity
 from apps.issues.models import Issue
 from apps.projects.models import Label, Project, ProjectMember
@@ -22,9 +28,8 @@ from apps.workspaces.models import Workspace
 from apps.workspaces.permissions import get_membership
 
 from . import services
-from .models import GitHubAccount, GitHubCommit, GitHubPullRequest, GitHubRepositoryLink
+from .models import GitHubAccount, GitHubCommit, GitHubPendingConnection, GitHubPullRequest, GitHubRepositoryLink
 from .parsing import extract_issue_ids
-from .workflow import advance_issue, branch_from_ref, parse_github_datetime
 from .serializers import (
     GitHubCommitSerializer,
     GitHubImportSerializer,
@@ -32,6 +37,7 @@ from .serializers import (
     GitHubRepositoryLinkCreateSerializer,
     GitHubRepositoryLinkSerializer,
 )
+from .workflow import advance_issue, branch_from_ref, parse_github_datetime
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -55,11 +61,43 @@ def _redirect_to_settings(**params):
     return redirect(f"{settings.FRONTEND_URL}/settings?{urlencode(params)}")
 
 
+PENDING_CONNECTION_TTL = timedelta(minutes=10)
+
+
+def _nonce_hash(nonce):
+    return hashlib.sha256(str(nonce).encode()).hexdigest()
+
+
+def _discard_pending(pendings):
+    """Drop parked authorizations, asking GitHub to revoke their tokens (nobody will ever use them)."""
+    for pending in pendings:
+        services.revoke_quietly(pending.access_token)
+        pending.delete()
+
+
+def _discard_expired_pending():
+    _discard_pending(GitHubPendingConnection.objects.filter(created_at__lt=timezone.now() - PENDING_CONNECTION_TTL))
+
+
+def disconnect_github(user):
+    """Forget a user's GitHub connection and ask GitHub to revoke its token (disconnect, account deletion)."""
+    for account in GitHubAccount.objects.filter(user=user):
+        services.revoke_quietly(account.access_token)
+        account.delete()
+    _discard_pending(GitHubPendingConnection.objects.filter(user=user))
+
+
 class GitHubConnectView(APIView):
+    """Start connecting GitHub. The browser sends a random `nonce` it keeps to itself (sessionStorage);
+    only its hash travels in the OAuth state, and the same browser must present the nonce to finish."""
+
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        state = signing.dumps({"user_id": request.user.id}, salt="github-oauth")
+        nonce = request.query_params.get("nonce", "")
+        if not (32 <= len(nonce) <= 128):
+            raise ValidationError({"nonce": "A random value of 32-128 characters is required."})
+        state = signing.dumps({"user_id": request.user.id, "nonce": _nonce_hash(nonce)}, salt="github-oauth")
         return Response({"authorize_url": services.build_authorize_url(state)})
 
 
@@ -72,7 +110,9 @@ class GitHubCallbackView(APIView):
     def get(self, request):
         error = request.query_params.get("error")
         if error:
-            return _redirect_to_settings(github_error=error)
+            # Only GitHub's own "the user said no" is passed through; anything else in the URL is not
+            # shown to the user (a crafted link could otherwise put any text in the settings banner).
+            return _redirect_to_settings(github_error="access_denied" if error == "access_denied" else "authorization_failed")
 
         code = request.query_params.get("code")
         state = request.query_params.get("state")
@@ -81,32 +121,68 @@ class GitHubCallbackView(APIView):
 
         try:
             state_data = signing.loads(state, salt="github-oauth", max_age=300)
-            user = User.objects.get(pk=state_data["user_id"])
-        except (signing.BadSignature, User.DoesNotExist):
+            user = User.objects.get(pk=state_data["user_id"], is_active=True)
+            nonce_hash = state_data["nonce"]
+        except (signing.BadSignature, User.DoesNotExist, KeyError, TypeError):
             return _redirect_to_settings(github_error="invalid_state")
 
         try:
             token_data = services.exchange_code_for_token(code)
             gh_user = services.fetch_github_user(token_data["access_token"])
-        except services.GitHubAPIError:
+        except (services.GitHubAPIError, KeyError):
             return _redirect_to_settings(github_error="connection_failed")
 
-        already_linked = (
-            GitHubAccount.objects.filter(github_user_id=gh_user["id"]).exclude(user=user).exists()
-        )
-        if already_linked:
-            return _redirect_to_settings(github_error="account_already_linked")
-
-        GitHubAccount.objects.update_or_create(
+        # Nothing is linked here: this request carries no proof of who the browser belongs to. The result
+        # is parked for the browser that started the flow to claim (GitHubCompleteView).
+        _discard_expired_pending()
+        pending = GitHubPendingConnection.objects.create(
             user=user,
+            nonce_hash=nonce_hash,
+            github_user_id=gh_user["id"],
+            github_username=gh_user["login"],
+            access_token=token_data["access_token"],
+            scope=token_data.get("scope", ""),
+        )
+        return _redirect_to_settings(github_pending=str(pending.pk))
+
+
+class GitHubCompleteView(APIView):
+    """Claim a parked GitHub authorization: only the DevTrack user who started the flow, from the browser
+    that holds its nonce, within a few minutes. Anything else discards it (and revokes its token)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        pending_id, nonce = request.data.get("pending"), request.data.get("nonce")
+        _discard_expired_pending()
+        try:
+            pending = GitHubPendingConnection.objects.get(pk=pending_id)
+        except (GitHubPendingConnection.DoesNotExist, ValueError, TypeError, ValidationError, DjangoValidationError):
+            return Response({"detail": "invalid_or_expired"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if pending.user_id != request.user.id or not hmac.compare_digest(pending.nonce_hash, _nonce_hash(nonce or "")):
+            # Someone else's authorization (a forwarded link) or a forged claim: it is never linked.
+            _discard_pending([pending])
+            return Response({"detail": "invalid_or_expired"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if GitHubAccount.objects.filter(github_user_id=pending.github_user_id).exclude(user=request.user).exists():
+            _discard_pending([pending])
+            return Response({"detail": "account_already_linked"}, status=status.HTTP_400_BAD_REQUEST)
+
+        previous = getattr(request.user, "github_account", None)
+        if previous is not None and previous.github_user_id != pending.github_user_id:
+            services.revoke_quietly(previous.access_token)  # reconnecting as another GitHub user
+        account, _ = GitHubAccount.objects.update_or_create(
+            user=request.user,
             defaults={
-                "github_user_id": gh_user["id"],
-                "github_username": gh_user["login"],
-                "access_token": token_data["access_token"],
-                "scope": token_data.get("scope", ""),
+                "github_user_id": pending.github_user_id,
+                "github_username": pending.github_username,
+                "access_token": pending.access_token,
+                "scope": pending.scope,
             },
         )
-        return _redirect_to_settings(github="connected")
+        pending.delete()
+        return Response({"connected": True, "github_username": account.github_username, "connected_at": account.connected_at})
 
 
 class GitHubStatusView(APIView):
@@ -132,7 +208,7 @@ class GitHubDisconnectView(APIView):
         # Deliberately does not touch any GitHubRepositoryLink — webhook
         # processing never uses a user's OAuth token, only GITHUB_WEBHOOK_SECRET,
         # so disconnecting doesn't break already-configured repo links.
-        GitHubAccount.objects.filter(user=request.user).delete()
+        disconnect_github(request.user)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -174,13 +250,13 @@ class ProjectGitHubLinkView(APIView):
 
         serializer = GitHubRepositoryLinkCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        github_repo_id = serializer.validated_data["github_repo_id"]
-        full_name = serializer.validated_data["full_name"]
+        repo = _verified_repo(account, serializer.validated_data["github_repo_id"], serializer.validated_data["full_name"])
 
-        if GitHubRepositoryLink.objects.filter(github_repo_id=github_repo_id).exists():
+        if GitHubRepositoryLink.objects.filter(github_repo_id=repo["id"]).exists():
             raise ValidationError({"detail": "This repository is already linked to another project."})
 
-        link, warning = _link_repository(project, request.user, account, github_repo_id, full_name)
+        # GitHub's own spelling of the name, not the client's.
+        link, warning = _link_repository(project, request.user, account, repo["id"], repo["full_name"])
         return Response(_link_response(link, warning), status=status.HTTP_201_CREATED)
 
     def delete(self, request, project_id):
@@ -227,6 +303,23 @@ def _verify_signature(body, header):
     return hmac.compare_digest(expected, header)
 
 
+def _verified_repo(account, github_repo_id, full_name):
+    """The repository as GitHub reports it, checked with the caller's own token.
+
+    The id and name in the request body are claims, not facts. Without this check anyone could "link"
+    an arbitrary repository id they cannot even see — squatting on it so its real owners could never
+    link it — or pair one repository's id with another's name. GitHub answers 404 for a repository the
+    token cannot read, and the id it returns must be the id that was claimed.
+    """
+    try:
+        repo = services.get_repo(account.access_token, full_name)
+    except services.GitHubAPIError as exc:
+        raise ValidationError({"detail": str(exc)})
+    if repo.get("id") != github_repo_id:
+        raise ValidationError({"detail": "That repository id does not belong to that repository."})
+    return repo
+
+
 def _link_repository(project, user, account, github_repo_id, full_name):
     """Link a repository to a project and try to install its webhook.
 
@@ -238,6 +331,9 @@ def _link_repository(project, user, account, github_repo_id, full_name):
     callback_url = settings.GITHUB_WEBHOOK_CALLBACK_URL
     if not services.is_public_url(callback_url):
         warning = {"code": "not_public_url", "detail": callback_url}
+    elif not settings.GITHUB_WEBHOOK_SECRET:
+        # A hook created without a secret would deliver unsigned events, and every one would be rejected.
+        warning = {"code": "github_rejected", "detail": "GITHUB_WEBHOOK_SECRET is not configured on the server."}
     else:
         try:
             hook = services.create_webhook(account.access_token, full_name, callback_url, settings.GITHUB_WEBHOOK_SECRET)
@@ -262,17 +358,11 @@ def _link_response(link, warning):
 
 
 def _match_issues(project, ids):
-    """Issues of `project` that `#<id>` references point at.
-
-    In a project with imported GitHub issues, `#12` means GitHub's issue 12 (that is what people type
-    in commits); otherwise it is the DevTrack issue id. GitHub numbering wins when both exist.
+    """Issues of `project` that `#<n>` references point at: `n` is the issue's number within the project
+    (what the UI shows). An issue imported from GitHub keeps GitHub's own number, so `#12` in a commit
+    means GitHub's issue 12 there. Only this project's issues are ever matched.
     """
-    if not ids:
-        return []
-    by_number = list(Issue.objects.filter(project=project, github_number__in=ids))
-    remaining = set(ids) - {issue.github_number for issue in by_number}
-    by_id = list(Issue.objects.filter(project=project, id__in=remaining)) if remaining else []
-    return by_number + by_id
+    return list(Issue.objects.filter(project=project, number__in=ids)) if ids else []
 
 
 def _upsert(model, retry_once=True, **kwargs):
@@ -290,13 +380,24 @@ def _upsert(model, retry_once=True, **kwargs):
         return _upsert(model, retry_once=False, **kwargs)
 
 
-def _resolve_actor(login, repo_link):
-    """The DevTrack user behind a GitHub login, else whoever connected the repository."""
-    if login:
-        account = GitHubAccount.objects.filter(github_username__iexact=login).select_related("user").first()
-        if account:
+def _resolve_actor(github_user, repo_link):
+    """The workspace member behind a GitHub user, else the member who linked the repository, else None
+    (the activity is then credited to the issue's reporter).
+
+    Matched by GitHub's numeric user id: logins can be renamed and then registered by someone else. Only
+    a login is known for commit authors in push payloads, so those are credited to the pusher (`sender`).
+    Never someone outside the workspace, who would otherwise show up in its activity feed.
+    """
+    workspace = repo_link.project.workspace
+    github_id = (github_user or {}).get("id")
+    if github_id:
+        account = GitHubAccount.objects.filter(github_user_id=github_id).select_related("user").first()
+        if account and account.user.is_active and get_membership(account.user, workspace) is not None:
             return account.user
-    return repo_link.connected_by
+    connector = repo_link.connected_by
+    if connector.is_active and get_membership(connector, workspace) is not None:
+        return connector
+    return None
 
 
 def _handle_push(repo_link, payload):
@@ -319,8 +420,8 @@ def _handle_push(repo_link, payload):
             },
         )
         commit_obj.issues.set(matched)
-        # Work has started the moment a commit mentions the issue.
-        actor = _resolve_actor(author.get("username"), repo_link)
+        # Work has started the moment a commit mentions the issue (credited to whoever pushed it).
+        actor = _resolve_actor(payload.get("sender"), repo_link)
         for issue in matched:
             advance_issue(issue, Issue.Status.IN_PROGRESS, actor)
 
@@ -350,7 +451,7 @@ def _handle_pull_request(repo_link, payload):
         },
     )
     pr.issues.set(matched)
-    actor = _resolve_actor((pr_data.get("user") or {}).get("login"), repo_link)
+    actor = _resolve_actor(pr_data.get("user"), repo_link)
 
     # GitHub only ever sets merged: true together with action: "closed" — there
     # is no separate "merged" action, so this is the correct/only merge trigger.
@@ -379,7 +480,7 @@ def _handle_pull_request(repo_link, payload):
             issue.save(update_fields=["status", "updated_at"])
             Activity.objects.create(
                 workspace=repo_link.project.workspace,
-                actor=actor,
+                actor=actor or issue.reporter,
                 verb="pr_merged",
                 target=issue,
                 metadata={
@@ -410,7 +511,7 @@ def _handle_issues_event(repo_link, payload):
     if payload.get("action") not in ("closed", "reopened"):
         return
     item = payload.get("issue") or {}
-    actor = _resolve_actor((payload.get("sender") or {}).get("login"), repo_link)
+    actor = _resolve_actor(payload.get("sender"), repo_link)
     _apply_github_issue_state(repo_link, item, actor)
 
 
@@ -481,8 +582,14 @@ def _safely(handler, repo_link, payload):
 
 
 def _repo_token(link, requester):
-    """The token used to read a linked repo: its connector's, else the requester's."""
-    for user in (link.connected_by, requester):
+    """The token used to read a linked repo: its connector's while they are still an active member of the
+    workspace (they proved access when linking), else the requester's own. Someone who left must not have
+    their GitHub access keep working for a workspace they no longer belong to."""
+    connector = link.connected_by
+    candidates = [requester]
+    if connector.is_active and get_membership(connector, link.project.workspace) is not None:
+        candidates.insert(0, connector)
+    for user in candidates:
         account = getattr(user, "github_account", None)
         if account is not None:
             return account.access_token
@@ -518,6 +625,7 @@ class ProjectGitHubSyncView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+    throttle_classes = [UserRateThrottle, GithubSyncRateThrottle]
 
     def post(self, request, project_id):
         project = get_object_or_404(Project, pk=project_id)
@@ -541,7 +649,8 @@ class ProjectGitHubSyncView(APIView):
             _safely(_handle_pull_request, link, _pull_request_payload(pr))
         push = {"ref": f"refs/heads/{link.default_branch}"} if link.default_branch else {}
         for item in reversed(commits):
-            _safely(_handle_push, link, {**push, "commits": [_commit_payload(item)]})
+            # The commit's GitHub author plays the pusher (`sender`) a webhook delivery would name.
+            _safely(_handle_push, link, {**push, "commits": [_commit_payload(item)], "sender": item.get("author")})
         for item in github_issues:
             _apply_github_issue_state(link, item, link.connected_by)
         link.last_synced_at = timezone.now()
@@ -582,12 +691,13 @@ def _import_issues(project, user, workspace, github_issues):
     for item in github_issues:
         label_data = item.get("labels") or []
         issue_type = next(
-            (ISSUE_TYPE_BY_LABEL[l["name"].lower()] for l in label_data if l.get("name", "").lower() in ISSUE_TYPE_BY_LABEL),
+            (ISSUE_TYPE_BY_LABEL[lb["name"].lower()] for lb in label_data if lb.get("name", "").lower() in ISSUE_TYPE_BY_LABEL),
             Issue.Type.TASK,
         )
         body = item.get("body") or ""
         issue = Issue.objects.create(
             project=project,
+            number=item["number"],
             title=(item.get("title") or f"GitHub issue #{item['number']}")[:200],
             description=body,
             type=issue_type,
@@ -597,8 +707,13 @@ def _import_issues(project, user, workspace, github_issues):
             github_number=item["number"],
             github_url=item.get("html_url", ""),
         )
-        issue.labels.set([label for label in (label_for(l) for l in label_data) if label is not None])
+        issue.labels.set([label for label in (label_for(lb) for lb in label_data) if label is not None])
         imported += 1
+    if github_issues:
+        # Issues created in DevTrack from now on continue after the highest imported (GitHub) number.
+        Project.objects.filter(pk=project.pk).update(
+            issue_counter=Greatest(F("issue_counter"), max(item["number"] for item in github_issues))
+        )
     return imported
 
 
@@ -618,22 +733,20 @@ class GitHubImportView(APIView):
         account = getattr(request.user, "github_account", None)
         if account is None:
             raise ValidationError({"detail": "Connect your GitHub account first."})
-        if GitHubRepositoryLink.objects.filter(github_repo_id=data["github_repo_id"]).exists():
-            raise ValidationError({"detail": "This repository is already linked to another project."})
-
         # Everything that talks to GitHub and can fail is read first, so a failure leaves nothing behind.
+        repo = _verified_repo(account, data["github_repo_id"], data["full_name"])
+        if GitHubRepositoryLink.objects.filter(github_repo_id=repo["id"]).exists():
+            raise ValidationError({"detail": "This repository is already linked to another project."})
+        full_name = repo["full_name"]
         try:
-            repo = services.get_repo(account.access_token, data["full_name"])
-            github_issues = (
-                services.list_repo_issues(account.access_token, data["full_name"]) if data["import_issues"] else []
-            )
+            github_issues = services.list_repo_issues(account.access_token, full_name) if data["import_issues"] else []
         except services.GitHubAPIError as exc:
             raise ValidationError({"detail": str(exc)})
 
         with transaction.atomic():
             project = Project.objects.create(
                 workspace=workspace,
-                name=(repo.get("name") or data["full_name"].split("/")[-1])[:150],
+                name=(repo.get("name") or full_name.split("/")[-1])[:150],
                 description=repo.get("description") or "",
                 status=Project.Status.ACTIVE,
                 owner=request.user,
@@ -642,7 +755,7 @@ class GitHubImportView(APIView):
             ProjectMember.objects.create(project=project, user=request.user, role="owner")
             imported = _import_issues(project, request.user, workspace, github_issues)
 
-        link, warning = _link_repository(project, request.user, account, data["github_repo_id"], data["full_name"])
+        link, warning = _link_repository(project, request.user, account, repo["id"], full_name)
         return Response(
             {
                 "project": {"id": project.id, "name": project.name},

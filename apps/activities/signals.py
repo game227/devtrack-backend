@@ -31,13 +31,53 @@ def log_project_created(sender, instance, created, **kwargs):
     )
 
 
+# Fields whose changes show in an issue's history (status has its own "moved" entry).
+TRACKED_FIELDS = ("title", "priority", "type", "assignee_id", "due_date", "estimate", "cycle_id", "milestone_id")
+
+
 @receiver(pre_save, sender=Issue)
 def stash_previous_issue_status(sender, instance, **kwargs):
     if not instance.pk:
         instance._previous_status = None
+        instance._previous_fields = None
         return
-    previous = Issue.objects.filter(pk=instance.pk).values_list("status", flat=True).first()
-    instance._previous_status = previous
+    previous = Issue.objects.filter(pk=instance.pk).values("status", *TRACKED_FIELDS).first()
+    instance._previous_status = previous["status"] if previous else None
+    instance._previous_fields = previous
+
+
+def _readable(field, value):
+    """A value as people read it: usernames and names instead of ids, ISO dates as text."""
+    if value is None or value == "":
+        return None
+    if field == "assignee_id":
+        from django.contrib.auth import get_user_model
+
+        return get_user_model().objects.filter(pk=value).values_list("username", flat=True).first()
+    if field == "cycle_id":
+        from apps.cycles.models import Cycle
+
+        return Cycle.objects.filter(pk=value).values_list("name", flat=True).first()
+    if field == "milestone_id":
+        from apps.milestones.models import Milestone
+
+        return Milestone.objects.filter(pk=value).values_list("name", flat=True).first()
+    return str(value)
+
+
+def _log_field_changes(instance, workspace):
+    previous = getattr(instance, "_previous_fields", None)
+    if not previous:
+        return
+    changes = []
+    for field in TRACKED_FIELDS:
+        before, after = previous.get(field), getattr(instance, field)
+        if before != after:
+            changes.append({"field": field.removesuffix("_id"), "from": _readable(field, before), "to": _readable(field, after)})
+    if changes:
+        Activity.objects.create(
+            workspace=workspace, actor=_actor_for(instance), verb="changed_issue", target=instance, metadata={"changes": changes}
+        )
 
 
 @receiver(post_save, sender=Issue)
@@ -51,6 +91,8 @@ def log_issue_created_or_moved(sender, instance, created, **kwargs):
             target=instance,
         )
         return
+
+    _log_field_changes(instance, workspace)
 
     # Callers that log their own richer activity for the transition (e.g. the
     # GitHub PR-merge handler's ``pr_merged``) opt out to avoid a duplicate entry.

@@ -17,6 +17,8 @@ DEBUG = env.bool("DEBUG", default=False)
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
 INSTALLED_APPS = [
+    # Before django.contrib.admin, so its admin template overrides take precedence.
+    "apps.adminui",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -27,10 +29,12 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "django_filters",
+    "apps.common",
     "apps.accounts",
     "apps.workspaces",
     "apps.projects",
     "apps.issues",
+    "apps.demo",
     "apps.comments",
     "apps.activities",
     "apps.analytics",
@@ -40,6 +44,7 @@ INSTALLED_APPS = [
     "apps.notifications",
     "apps.integrations",
     "apps.telegram_bot",
+    "apps.live",
 ]
 
 MIDDLEWARE = [
@@ -51,6 +56,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "apps.common.middleware.ApiResponseHeadersMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -78,6 +84,17 @@ DATABASES = {
 
 AUTH_USER_MODEL = "accounts.User"
 
+# Argon2 first: memory-hard, so offline cracking of a leaked database is far more expensive than with
+# PBKDF2. Existing PBKDF2 hashes keep working and are upgraded transparently on the user's next login.
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
+]
+
+# Password-reset and email-verification links expire after a day (Django's default is three).
+PASSWORD_RESET_TIMEOUT = 60 * 60 * 24
+
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -96,6 +113,27 @@ MEDIA_ROOT = BASE_DIR / "media"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# Throttle counters live in the cache. The default is per-process memory, which is right for a single
+# gunicorn worker; with several workers or instances point CACHE_URL at a shared backend
+# (e.g. ``dbcache://django_cache`` after ``manage.py createcachetable``, or a Redis URL).
+CACHES = {"default": environ.Env.cache_url_config(env("CACHE_URL", default="").strip() or "locmemcache://")}
+
+# The Django admin lives under this path. Moving it off the guessable default keeps scanners and
+# credential-stuffing bots away from the login form; set ADMIN_URL=some-long-random-path/ in production.
+# An empty value (e.g. a dashboard variable created but left blank) falls back to the default instead of
+# mounting the admin at the site root.
+ADMIN_URL = (env("ADMIN_URL", default="").strip().strip("/") or "admin") + "/"
+
+# Largest multipart request accepted (avatars). Enforced before the body is read.
+MAX_UPLOAD_BYTES = int(env("MAX_UPLOAD_BYTES", default="").strip() or 3 * 1024 * 1024)
+# Issue attachments may be bigger; only the attachment upload endpoint accepts requests up to this size.
+ATTACHMENT_MAX_BYTES = int(env("ATTACHMENT_MAX_BYTES", default="").strip() or 10 * 1024 * 1024)
+FILE_UPLOAD_HANDLERS = [
+    "apps.common.uploads.MaxRequestSizeUploadHandler",
+    "django.core.files.uploadhandler.MemoryFileUploadHandler",
+    "django.core.files.uploadhandler.TemporaryFileUploadHandler",
+]
+
 # Deliver password-reset links on a background thread so the request returns
 # immediately (and timing does not reveal whether an account exists). Production turns
 # this on; tests and local dev stay synchronous.
@@ -104,6 +142,13 @@ PASSWORD_RESET_ASYNC = env.bool("PASSWORD_RESET_ASYNC", default=False)
 # Where the frontend lives — used to build links (e.g. password reset) that
 # point at the SPA rather than the API.
 FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:5173")
+
+# Where people reach the team: shown in the web app, and the Reply-To of every email DevTrack sends. (The
+# From address stays DEFAULT_FROM_EMAIL, on a domain the mail provider has verified; a Gmail address
+# cannot be the sender through Resend, but replies go here.)
+# Language of the weekly digest email (the API does not store each user's UI language).
+DIGEST_LANGUAGE = env("DIGEST_LANGUAGE", default="uz")
+SUPPORT_EMAIL = env("SUPPORT_EMAIL", default="safary12800@gmail.com")
 
 GITHUB_CLIENT_ID = env("GITHUB_CLIENT_ID", default="")
 GITHUB_CLIENT_SECRET = env("GITHUB_CLIENT_SECRET", default="")
@@ -142,9 +187,12 @@ GITHUB_WEBHOOK_CALLBACK_URL = env(
     "GITHUB_WEBHOOK_CALLBACK_URL", default="http://localhost:8000/api/v1/integrations/github/webhook/"
 )
 
+# Blank means "not configured" (DRF's default); 0 is meaningful (ignore X-Forwarded-For entirely).
+_NUM_PROXIES = env("NUM_PROXIES", default="").strip()
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.demo.authentication.DemoAwareJWTAuthentication",
     ),
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
@@ -158,6 +206,10 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_CLASSES": (
         "rest_framework.throttling.UserRateThrottle",
     ),
+    # How many reverse proxies sit in front of the app. DRF uses it to read the client address from
+    # X-Forwarded-For; left unset it trusts the *whole* header, which a client can forge to dodge the
+    # per-IP limits. Set it to the real number of proxies (see the README, "Deploying").
+    "NUM_PROXIES": int(_NUM_PROXIES) if _NUM_PROXIES else None,
     "DEFAULT_THROTTLE_RATES": {
         "anon": "20/min",
         # Generous safety net for authenticated traffic — not meant to affect
@@ -167,11 +219,23 @@ REST_FRAMEWORK = {
         "user": "600/min",
         "login_account": "10/min",
         "email_verify_resend": "3/min",
+        # Per-target limits do not depend on the caller's IP, so they hold even when the IP is spoofed.
+        "password_reset_email": "3/hour",
+        "register": "10/hour",
+        "member_add": "60/hour",
+        "github_sync": "10/min",
+        "two_factor": "10/min",
+        "password_check": "10/min",
+        "issue_export": "30/hour",
+        "attachment_upload": "60/hour",
+        "demo_start": "5/hour",
+        "share_view": "60/min",
     },
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    # Short-lived: an access token cannot be revoked, so a stolen one is only useful for this long.
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=14),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
@@ -180,6 +244,20 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = env.list(
     "CORS_ALLOWED_ORIGINS", default=["http://localhost:5173"]
 )
+# Web Push (notifications with the app closed). Off until both keys are set: `manage.py generate_vapid_keys`.
+WEB_PUSH_VAPID_PUBLIC_KEY = env("WEB_PUSH_VAPID_PUBLIC_KEY", default="")
+WEB_PUSH_VAPID_PRIVATE_KEY = env("WEB_PUSH_VAPID_PRIVATE_KEY", default="")
+WEB_PUSH_SUBJECT = env("WEB_PUSH_SUBJECT", default=f"mailto:{SUPPORT_EMAIL}")
+WEB_PUSH_ASYNC = env.bool("WEB_PUSH_ASYNC", default=False)
+
+# "Try the demo": throwaway accounts with a sample workspace. Off unless explicitly enabled; when on, run
+# `manage.py cleanup_demo` hourly (expired demos are also swept whenever a new one starts).
+DEMO_ENABLED = env.bool("DEMO_ENABLED", default=False)
+DEMO_TTL_HOURS = env.int("DEMO_TTL_HOURS", default=24)
+DEMO_MAX_ACTIVE = env.int("DEMO_MAX_ACTIVE", default=200)
+
+# The frontend reads the file name of a download (the CSV export) from this header.
+CORS_EXPOSE_HEADERS = ["Content-Disposition"]
 
 # Structured console logging — Render (and most PaaS) collect stdout directly,
 # so there's no file handler to manage. Django's own request logger stays at

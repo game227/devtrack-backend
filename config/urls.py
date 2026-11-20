@@ -8,6 +8,7 @@ from django.http import JsonResponse
 from django.urls import include, path
 
 from apps.analytics.views import DashboardView, DeveloperAnalyticsView, SearchView
+from apps.issues.share_preview import ShareCardView, SharePreviewView
 from apps.projects.views import NoteDetailView
 
 
@@ -16,7 +17,7 @@ def health(request):
 
 
 urlpatterns = [
-    path("admin/", admin.site.urls),
+    path(settings.ADMIN_URL, admin.site.urls),
     path("api/v1/health/", health),
     path("api/v1/auth/", include("apps.accounts.urls")),
     path("api/v1/workspaces/", include("apps.workspaces.urls")),
@@ -36,6 +37,11 @@ urlpatterns = [
     path("api/v1/notifications/", include("apps.notifications.urls")),
     path("api/v1/integrations/", include("apps.integrations.urls")),
     path("api/v1/telegram/", include("apps.telegram_bot.urls")),
+    path("api/v1/changes/", include("apps.live.urls")),
+    path("api/v1/demo/", include("apps.demo.urls")),
+    # Share links: a preview for chat apps (Open Graph tags and a card image) that sends people on to the app.
+    path("s/<str:token>", SharePreviewView.as_view(), name="share-preview"),
+    path("s/<str:token>/card.png", ShareCardView.as_view(), name="share-card"),
 ]
 
 if settings.DEBUG:

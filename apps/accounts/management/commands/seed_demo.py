@@ -5,9 +5,10 @@ All accounts use the password ``demo1234``.
 """
 from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.utils import timezone
 
@@ -23,7 +24,7 @@ from apps.workspaces.models import Membership, Workspace
 
 User = get_user_model()
 WORKSPACE_NAME = "Nova Labs"
-PASSWORD = "demo1234"
+PASSWORD = "demo1234"  # noqa: S105 — demo accounts only; the command refuses to run with DEBUG off
 
 PEOPLE = [
     # username, first, last, title, workspace role
@@ -138,9 +139,21 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument("--reset", action="store_true", help="Delete the demo workspace first and recreate it.")
+        parser.add_argument(
+            "--allow-production",
+            action="store_true",
+            help="Run even though DEBUG is off. Never do this on a real database: the demo accounts have publicly known passwords.",
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
+        if not settings.DEBUG and not options["allow_production"]:
+            # The demo users' passwords are printed in the README. On a production database they would be
+            # working credentials for anyone who reads it.
+            raise CommandError(
+                "Refusing to create demo accounts with publicly known passwords while DEBUG is off. "
+                "This command is for local development only."
+            )
         existing = Workspace.objects.filter(name=WORKSPACE_NAME).first()
         if existing and not options["reset"]:
             self.stdout.write(f'"{WORKSPACE_NAME}" already exists — nothing to do (use --reset to recreate).')
